@@ -334,6 +334,122 @@ Trade-off: Agent reasoning latency artar (multiple tool calls), bu yüzden case'
 
 ---
 
+## 5c2. LLM Gateway Architecture (LiteLLM)
+
+Production'a daha yakın olmak için tüm LLM çağrıları artık **LiteLLM Proxy** üzerinden geçer. Uygulama kodu hiçbir model ID'sini bilmez — sadece **alias**lar (`vehicle-finance-small`, `vehicle-finance-large`, `vehicle-finance-guard`) ve **node policy**'leri kullanır.
+
+```
+LangGraph node
+   │ node_purpose="faq_answer"
+   ▼
+LLMGatewayClient
+   ├── routing_policy.get_policy()    → NodePolicy (model_alias, budgets)
+   ├── budget.fit_to_budget()         → trim context / fail safe
+   ├── (LiteLLM call via ChatOpenAI)
+   ├── usage_logger.log_usage()       → llm_usage_logs (PII-free)
+   └── on failure → fallback_alias
+```
+
+### Why LiteLLM?
+
+| Sorun | LiteLLM çözümü |
+|------|-----------------|
+| Provider lock-in | Aliases üzerinden router; vLLM/Ollama/cloud aynı API ile değiştirilebilir |
+| Token/cost tracking | Built-in observability + `model_info.input_cost_per_token` |
+| Rate limit / TPM-RPM | LiteLLM router seviyesinde |
+| Multi-model fallback | `router_settings.fallbacks` |
+| Caching | Local prompt cache (FAQ tekrarı için tasarruf) |
+| Multi-tenant key auth | Virtual key per uygulama (master key sadece infra) |
+| Tek operasyonel kontrat | Bankanın iç AI platformuyla aynı pattern |
+
+### Token Budgeting Strategy
+
+Her LangGraph node'u için ayrı bütçe; magic-number değil named policy:
+
+| Node | Model alias | Input | Output | Notlar |
+|------|-------------|-------|--------|--------|
+| `intent_classification` | small | 800 | 120 | Tek satır karar; küçük model yeter |
+| `field_extraction` | small | 1200 | 300 | Structured JSON çıktısı |
+| `faq_answer` | large | 3500 | 700 | RAG context + Türkçe akıcılık ister |
+| `final_summary` | small | 1200 | 350 | Önceden hazırlanmış özet metni biçimlendir |
+| `safety_check` | guard | 1000 | 100 | Llama-Guard-3-8B (hızlı, ucuz) |
+| `response_generation` | small | 1500 | 400 | Genel cevap üretimi |
+
+**Pre-call kontrol**: `fit_to_budget`
+1. Estimated prompt tokens hesaplanır (tiktoken / heuristic).
+2. Conversation history önce trim'lenir (en yeni mesajlar tutulur).
+3. RAG chunk sayısı azaltılır.
+4. Hâlâ limitin üstündeyse `BudgetExceededError` → safe deterministic reply.
+5. `max_tokens` ayarı policy'den geçilir, böylece LLM cevabı budget'ı asla aşamaz.
+
+**Post-call log** (`llm_usage_logs`): `session_id`, `customer_id_hash` (SHA-256 prefix), `conversation_step`, `node_purpose`, `model_name`, `provider`, prompt/completion/total tokens, `estimated_cost_usd`, `latency_ms`, `litellm_call_id`, `fallback_used`, `trimmed_context_count`. **Raw prompt/completion metni asla bu tabloya yazılmaz.**
+
+### Cost vs GPU Capacity Management
+
+- Small model 7×, large model 1× — node routing intent/extraction'ı small'a kaydırır → GPU saatinin önemli kısmı tasarruf.
+- LiteLLM cache: aynı FAQ sorgusu tekrar gelirse cache'ten dönülür.
+- `tpm`/`rpm` limitleri LiteLLM config'te → throttling DOWN-stream sorun yaratmadan üst katmanda kesilir.
+- `trimmed_context_count > 0` rate'i izlenir → çok sık trim'lenmek RAG chunking ayarının yenilenmesi gerektiğini söyler.
+
+### Model Routing Policy
+
+```yaml
+intent_classification → vehicle-finance-small  (fallback: large)
+field_extraction      → vehicle-finance-small  (fallback: large)
+faq_answer            → vehicle-finance-large
+final_summary         → vehicle-finance-small  (fallback: large)
+safety_check          → vehicle-finance-guard
+response_generation   → vehicle-finance-small
+```
+
+Provider failure'da policy'nin `fallback_alias`'ı bir kez denenir; çift fallback yoktur.
+
+### Local-only Production Mode
+
+Default `ENABLE_CLOUD_FALLBACK=false`. Bu modda **hiçbir kullanıcı verisi banka dışına çıkmaz**:
+- Tüm aliaslar `hosted_vllm/...` veya `ollama/...` (lokal).
+- `cloud-fallback-large` alias'ı LiteLLM config'te tanımlı ama gateway client `_CLOUD_ALIASES` setini görür ve çağrıyı `CloudFallbackDisabledError` ile reddeder.
+- Bu redaksiyon **uygulama kodu seviyesinde** zorlanır — LiteLLM yanlış config'le bile cloud'a çıkamaz.
+
+### Cloud Fallback Policy
+
+Eğer prod ekibi `ENABLE_CLOUD_FALLBACK=true` ayarlarsa:
+1. PII redaction MUST run before any cloud call (TCKN, telefon, isim mask'lenir).
+2. Cloud çağrısı yalnızca local hepsi fail olduğunda denenir.
+3. Audit log'a `provider=cloud` event eklenir, gerçek-zamanlı alert tetiklenir.
+4. Cloud quota / latency dashboard'da gösterilir.
+
+### LiteLLM Docker Setup
+
+```bash
+# Konfigürasyon: infra/litellm/config.yaml
+cp .env.example .env
+# .env içinde LLM_GATEWAY_ENABLED=true olarak ayarla.
+
+docker compose up -d litellm-db litellm
+# Proxy http://localhost:4000/ adresinde çalışır.
+# Admin UI: http://localhost:4000/ui  (master key ile giriş)
+
+docker compose up -d api  # api artık LiteLLM üzerinden gider
+```
+
+Logical chain: `api` → `litellm:4000` → `vLLM 8000/8001/8002` veya `ollama:11434`.
+
+### Admin Usage Endpoints
+
+```bash
+# Son LLM çağrı kayıtları (PII-free)
+curl http://localhost:8080/admin/llm-usage
+
+# Model x node bazlı toplam (cost dashboard için)
+curl http://localhost:8080/admin/llm-usage/summary
+
+# Mevcut node policy'leri ve gateway durumu
+curl http://localhost:8080/admin/llm-budget/status
+```
+
+---
+
 ## 5d. Inference Cost Optimization
 
 Banka chatbot'unda **inference maliyeti = (GPU saat × concurrent kullanıcı) / başarılı başvuru**. Optimizasyon stratejisi:

@@ -449,17 +449,24 @@ def _extract_model_name(text: str) -> str | None:
 
 
 class LLMExtractor:
-    """LangChain-based structured extractor.
+    """LangChain-based structured extractor with gateway routing.
 
-    Used when LLM_PROVIDER != "mock". Falls back to RuleBasedExtractor on
-    any error so a flaky local LLM never breaks the chat path.
+    When ``LLM_GATEWAY_ENABLED=true`` the call goes through the
+    LLMGatewayClient — picking up node-level token budgets, routing,
+    fallback and usage logging. Otherwise we keep the legacy direct
+    ChatOpenAI path so existing deployments are unaffected.
+
+    Always falls back to ``RuleBasedExtractor`` on errors so a flaky
+    local LLM never breaks the chat path.
     """
 
     def __init__(self) -> None:
         from langchain_openai import ChatOpenAI
 
         settings = get_settings()
+        self._settings = settings
         self._fallback = RuleBasedExtractor()
+        # Legacy direct-to-provider path (only used when gateway disabled).
         self._llm = ChatOpenAI(
             model=settings.llm_model,
             base_url=settings.llm_base_url,
@@ -475,6 +482,39 @@ class LLMExtractor:
             "current_step": state.current_step.value,
             "finance_type": state.fields.finance_type.value if state.fields.finance_type else None,
         }
+
+        if self._settings.llm_gateway_enabled:
+            try:
+                from app.llm_gateway import (
+                    BudgetExceededError,
+                    get_gateway_client,
+                )
+                from app.llm_gateway.routing_policy import NODE_FIELD
+
+                client = get_gateway_client()
+                response = client.invoke(
+                    node_purpose=NODE_FIELD,
+                    system_prompt=SYSTEM_INTENT_EXTRACTION,
+                    user_message=f"context: {ctx}\nuser: {message}",
+                    session_id=state.session_id,
+                    customer_id=state.customer_id,
+                    conversation_step=state.current_step.value,
+                )
+                # Gateway path returns plain content; we parse it as JSON
+                # into ExtractedFields. If the local model didn't return
+                # valid JSON, fall back to rule-based.
+                import json
+
+                try:
+                    return ExtractedFields.model_validate(json.loads(response.content))
+                except Exception:
+                    return self._fallback.extract(message, state)
+            except BudgetExceededError:
+                # Hard safety: never make an unbounded call.
+                return self._fallback.extract(message, state)
+            except Exception:
+                return self._fallback.extract(message, state)
+
         try:
             result = self._structured.invoke(
                 [
@@ -491,7 +531,7 @@ class LLMExtractor:
 
 def get_extractor():
     settings = get_settings()
-    if settings.llm_provider == "mock":
+    if settings.llm_provider == "mock" and not settings.llm_gateway_enabled:
         return RuleBasedExtractor()
     try:
         return LLMExtractor()

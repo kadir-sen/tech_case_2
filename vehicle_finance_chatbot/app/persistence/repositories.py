@@ -16,6 +16,7 @@ from app.persistence.models import (
     ConversationStateRow,
     HgsLead,
     IdempotencyRecord,
+    LLMUsageLog,
     VehicleFinanceApplication,
 )
 
@@ -165,3 +166,91 @@ class AuditRepository:
                 )
             )
             s.commit()
+
+
+class LLMUsageRepository:
+    def write(
+        self,
+        *,
+        session_id: str | None,
+        customer_id_hash: str | None,
+        conversation_step: str | None,
+        node_purpose: str | None,
+        model_name: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+        total_tokens: int,
+        estimated_cost_usd: float,
+        latency_ms: int,
+        litellm_call_id: str | None,
+        fallback_used: bool = False,
+        trimmed_context_count: int = 0,
+    ) -> None:
+        with get_session() as s:
+            s.add(
+                LLMUsageLog(
+                    session_id=session_id,
+                    customer_id_hash=customer_id_hash,
+                    conversation_step=conversation_step,
+                    node_purpose=node_purpose,
+                    model_name=model_name,
+                    provider=provider,
+                    prompt_tokens=prompt_tokens,
+                    completion_tokens=completion_tokens,
+                    total_tokens=total_tokens,
+                    estimated_cost_usd=estimated_cost_usd,
+                    latency_ms=latency_ms,
+                    litellm_call_id=litellm_call_id,
+                    fallback_used=fallback_used,
+                    trimmed_context_count=trimmed_context_count,
+                )
+            )
+            s.commit()
+
+    def list_recent(self, limit: int = 100) -> list[LLMUsageLog]:
+        with get_session() as s:
+            return (
+                s.query(LLMUsageLog)
+                .order_by(LLMUsageLog.created_at.desc())
+                .limit(limit)
+                .all()
+            )
+
+    def summary(self) -> dict[str, Any]:
+        from sqlalchemy import func
+
+        with get_session() as s:
+            rows = (
+                s.query(
+                    LLMUsageLog.model_name,
+                    LLMUsageLog.node_purpose,
+                    func.count(LLMUsageLog.id),
+                    func.sum(LLMUsageLog.prompt_tokens),
+                    func.sum(LLMUsageLog.completion_tokens),
+                    func.sum(LLMUsageLog.total_tokens),
+                    func.sum(LLMUsageLog.estimated_cost_usd),
+                    func.avg(LLMUsageLog.latency_ms),
+                )
+                .group_by(LLMUsageLog.model_name, LLMUsageLog.node_purpose)
+                .all()
+            )
+            buckets = [
+                {
+                    "model_name": r[0],
+                    "node_purpose": r[1],
+                    "calls": int(r[2] or 0),
+                    "prompt_tokens": int(r[3] or 0),
+                    "completion_tokens": int(r[4] or 0),
+                    "total_tokens": int(r[5] or 0),
+                    "estimated_cost_usd": round(float(r[6] or 0.0), 6),
+                    "avg_latency_ms": round(float(r[7] or 0.0), 1),
+                }
+                for r in rows
+            ]
+            return {
+                "total_calls": sum(b["calls"] for b in buckets),
+                "total_tokens": sum(b["total_tokens"] for b in buckets),
+                "total_cost_usd": round(sum(b["estimated_cost_usd"] for b in buckets), 6),
+                "by_model_and_node": buckets,
+            }

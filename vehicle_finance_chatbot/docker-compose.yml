@@ -15,10 +15,19 @@ services:
       DATABASE_URL: "sqlite:///./data/vehicle_finance.db"
       PII_LOG_MASKING: "true"
       AUDIT_LOG_PATH: "./data/audit.log"
+      # LLM Gateway
+      LLM_GATEWAY_ENABLED: "${LLM_GATEWAY_ENABLED:-false}"
+      LITELLM_BASE_URL: "http://litellm:4000"
+      LITELLM_VIRTUAL_KEY: "${LITELLM_VIRTUAL_KEY:-sk-app-dev-1234}"
+      LITELLM_MODEL_LARGE: "${LITELLM_MODEL_LARGE:-vehicle-finance-large}"
+      LITELLM_MODEL_SMALL: "${LITELLM_MODEL_SMALL:-vehicle-finance-small}"
+      LITELLM_MODEL_GUARD: "${LITELLM_MODEL_GUARD:-vehicle-finance-guard}"
+      ENABLE_CLOUD_FALLBACK: "${ENABLE_CLOUD_FALLBACK:-false}"
     volumes:
       - ./data:/app/data
     depends_on:
       - qdrant
+      - litellm
 
   qdrant:
     image: qdrant/qdrant:v1.10.1
@@ -26,6 +35,38 @@ services:
       - "6333:6333"
     volumes:
       - ./qdrant_data:/qdrant/storage
+
+  # LiteLLM Proxy — single chokepoint for inference. Models routed via
+  # infra/litellm/config.yaml. UI at http://localhost:4000/ui.
+  litellm:
+    image: ghcr.io/berriai/litellm:main-stable
+    ports:
+      - "4000:4000"
+    environment:
+      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-master-dev-1234}"
+      LITELLM_DB_URL: "postgresql://litellm:litellm@litellm-db:5432/litellm"
+      LITELLM_UI_PASSWORD: "${LITELLM_UI_PASSWORD:-admin}"
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-not-set}"
+    command:
+      - "--config"
+      - "/app/config.yaml"
+      - "--port"
+      - "4000"
+      - "--num_workers"
+      - "2"
+    volumes:
+      - ./infra/litellm/config.yaml:/app/config.yaml:ro
+    depends_on:
+      - litellm-db
+
+  litellm-db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: litellm
+      POSTGRES_DB: litellm
+    volumes:
+      - ./litellm_db:/var/lib/postgresql/data
 
   # Optional: vLLM model server. Uncomment and configure if you have GPUs.
   # vllm:

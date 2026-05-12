@@ -1,0 +1,87 @@
+# LiteLLM Proxy configuration.
+#
+# Aliases (model_name fields) are the ONLY identifiers the application
+# code references. The concrete model paths (litellm_params.model)
+# can change with no application redeploy.
+
+model_list:
+  # ---- Local large model (vLLM) -----------------------------------
+  - model_name: vehicle-finance-large
+    litellm_params:
+      model: hosted_vllm/Qwen2.5-72B-Instruct-AWQ
+      api_base: http://host.docker.internal:8000/v1
+      api_key: local-dev-key
+      tpm: 600000
+      rpm: 600
+    model_info:
+      input_cost_per_token: 0.00000060
+      output_cost_per_token: 0.00000120
+
+  # ---- Local small model (vLLM) -----------------------------------
+  - model_name: vehicle-finance-small
+    litellm_params:
+      model: hosted_vllm/Qwen2.5-14B-Instruct
+      api_base: http://host.docker.internal:8001/v1
+      api_key: local-dev-key
+      tpm: 1500000
+      rpm: 1500
+    model_info:
+      input_cost_per_token: 0.00000010
+      output_cost_per_token: 0.00000020
+
+  # ---- Local guard model (small + low-temp) -----------------------
+  - model_name: vehicle-finance-guard
+    litellm_params:
+      model: hosted_vllm/Llama-Guard-3-8B
+      api_base: http://host.docker.internal:8002/v1
+      api_key: local-dev-key
+      tpm: 600000
+      rpm: 1000
+    model_info:
+      input_cost_per_token: 0.00000005
+      output_cost_per_token: 0.00000010
+
+  # ---- Dev / fallback via Ollama -----------------------------------
+  - model_name: vehicle-finance-dev
+    litellm_params:
+      model: ollama/qwen2.5:14b-instruct
+      api_base: http://host.docker.internal:11434
+      api_key: ollama-noauth
+    model_info:
+      input_cost_per_token: 0.0
+      output_cost_per_token: 0.0
+
+  # ---- Cloud fallback (disabled by default) ------------------------
+  # Routing policy enforces ENABLE_CLOUD_FALLBACK=true before this can
+  # be reached. PII redaction must run before any cloud call.
+  - model_name: cloud-fallback-large
+    litellm_params:
+      model: openai/gpt-4o-mini
+      api_key: os.environ/OPENAI_API_KEY
+    model_info:
+      input_cost_per_token: 0.00000300
+      output_cost_per_token: 0.00000900
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/LITELLM_DB_URL
+  store_model_in_db: false
+  ui_username: admin
+  ui_password: os.environ/LITELLM_UI_PASSWORD
+
+litellm_settings:
+  drop_params: true        # silently drop unsupported params instead of erroring
+  set_verbose: false
+  num_retries: 1
+  request_timeout: 30
+  telemetry: false
+  cache: true
+  cache_params:
+    type: local
+    supported_call_types: ["acompletion", "completion"]
+
+router_settings:
+  routing_strategy: simple-shuffle
+  fallbacks:
+    - vehicle-finance-small: [vehicle-finance-large]
+    - vehicle-finance-large: [vehicle-finance-dev]

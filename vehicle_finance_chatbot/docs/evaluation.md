@@ -52,6 +52,25 @@ eşik; biri %100'ün altına düşerse run fail eder.
 - 4 prompt injection (EN + TR varyantlar)
 - 2 benign kontrol
 
+## LLM Gateway Metrikleri
+
+LiteLLM gateway etkinleştirildiğinde `llm_usage_logs` tablosundan
+türetilen ek metrikler (`/admin/llm-usage/summary`):
+
+| Metrik | Hesap | Hedef |
+|--------|-------|-------|
+| `average_prompt_tokens_per_turn` | `sum(prompt_tokens) / count(distinct session+turn)` | trend izlenir |
+| `average_completion_tokens_per_turn` | `sum(completion_tokens) / count(...)` | < ilgili node'un `max_output_tokens` 0.7'si |
+| `total_tokens_per_completed_application` | `sum(total_tokens) by session having application_id IS NOT NULL` | benchmark öncesi belirlenir |
+| `cost_per_completed_application` | `sum(estimated_cost_usd) by session having application_id IS NOT NULL` | bütçeye göre alert |
+| `model_route_distribution` | `count by model_name` — small/large/guard payı | small ≥ %70 hedefi |
+| `token_budget_violation_count` | `BudgetExceededError` sayısı (audit log + Prometheus) | uzun vadede 0 |
+| `fallback_rate` | `count(fallback_used=true) / total_calls` | < %2 |
+| `trimmed_context_rate` | `count(trimmed_context_count > 0) / faq_call_count` | trend; chunking parametre sinyali |
+
+`token_budget_violation_count` ve `fallback_rate` sert eşik adayıdır;
+prod'da %1'in üstüne çıkarsa CI fail veya rollback tetiklenir.
+
 ## Genişletme Önerileri
 
 - Hallucination eval: LLM mode'da FAQ cevabı içindeki finansal sayıları

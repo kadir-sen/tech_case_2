@@ -83,7 +83,29 @@ flowchart LR
     CTX --> ANS[LLM answer<br/>or top-chunk fallback]
 ```
 
-## 6. Production-grade Notları
+## 6. LLM Gateway (LiteLLM)
+
+```mermaid
+flowchart LR
+    NODE[LangGraph node<br/>node_purpose=...] --> GW[LLMGatewayClient]
+    GW --> POL[routing_policy<br/>NodePolicy]
+    GW --> BUD[budget.fit_to_budget<br/>trim or fail]
+    BUD -->|over budget| SAFE[Safe deterministic reply]
+    GW --> LITELLM[LiteLLM Proxy :4000]
+    LITELLM --> VLLMLARGE[vLLM 72B :8000]
+    LITELLM --> VLLMSMALL[vLLM 14B :8001]
+    LITELLM --> GUARD[Llama-Guard :8002]
+    LITELLM --> OLLAMA[Ollama :11434 dev]
+    LITELLM -. blocked by default .-> CLOUD[OpenAI cloud fallback]
+    GW --> USAGE[(llm_usage_logs<br/>PII-free)]
+    GW -->|policy.fallback_alias| LITELLM
+```
+
+Application kod hiçbir model ID'sini bilmez; sadece `vehicle-finance-{small,large,guard}` alias'ları üzerinden iletişim kurar. Model swap = `infra/litellm/config.yaml` değişikliği + LiteLLM restart.
+
+Cloud fallback **kod seviyesinde** kapatılmıştır (`_CLOUD_ALIASES` setine erken redaksiyon). Yalnızca `ENABLE_CLOUD_FALLBACK=true` env ile açılabilir; PII redaction adımı henüz tamamlanmadığı için MVP'de devre dışı kalmalı.
+
+## 7. Production-grade Notları
 
 - **Vehicle catalog**: `domain/vehicle_catalog.py` MVP mock'tur. Prod'da
   bankanın **kasko değer listesi** veya **araç model katalog** servisi

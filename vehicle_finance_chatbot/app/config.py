@@ -16,6 +16,17 @@ class Settings(BaseSettings):
     llm_model: str = "Qwen2.5-72B-Instruct-AWQ"
     llm_temperature: float = 0.1
 
+    # LLM Gateway (LiteLLM)
+    llm_gateway_enabled: bool = False
+    litellm_base_url: str = "http://localhost:4000"
+    litellm_master_key: str = "sk-master-dev-1234"
+    litellm_virtual_key: str = "sk-app-dev-1234"
+    litellm_model_large: str = "vehicle-finance-large"
+    litellm_model_small: str = "vehicle-finance-small"
+    litellm_model_guard: str = "vehicle-finance-guard"
+    llm_request_timeout_s: int = 30
+    enable_cloud_fallback: bool = False
+
     # Embeddings
     embedding_provider: Literal["hash", "sentence-transformers"] = "hash"
     embedding_model: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"

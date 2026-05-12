@@ -12,4 +12,5 @@ venv/
 .vscode/
 data/
 qdrant_data/
+litellm_db/
 .DS_Store

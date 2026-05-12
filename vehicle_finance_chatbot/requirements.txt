@@ -11,6 +11,9 @@ langchain-core>=0.2.0
 langchain-openai>=0.1.7
 langgraph>=0.0.60
 
+# LLM Gateway / token accounting
+tiktoken>=0.7.0
+
 # RAG: in-MVP we use FAISS as default; Qdrant supported via docker-compose
 faiss-cpu>=1.7.4
 qdrant-client>=1.9.0
