@@ -19,10 +19,14 @@ os.environ.setdefault("EMBEDDING_PROVIDER", "hash")
 os.environ.setdefault("VECTORSTORE", "faiss")
 os.environ.setdefault("AUDIT_LOG_PATH", str(Path(tempfile.gettempdir()) / "vfc_audit.log"))
 
-# Pre-test valid TCKN fixtures (checksum verified).
-VALID_TCKN_GUARANTOR = "88477778400"
-VALID_TCKN_SELLER = "35886454272"
-VALID_TCKN_OTHER = "93297841586"
+# Pre-test valid TCKN fixtures (checksum verified). These do NOT collide
+# with the mock customer TCKNs stored in app.auth.mock_customer_store.
+VALID_TCKN_GUARANTOR = "23456789138"
+VALID_TCKN_SELLER = "34567891238"
+VALID_TCKN_OTHER = "45678912316"
+
+# Real TCKN of CUST001 — used by self-guarantor regression test.
+CUST001_REAL_TCKN = "60064805492"
 
 
 import pytest

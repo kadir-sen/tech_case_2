@@ -99,6 +99,7 @@ class ConversationStateModel(BaseModel):
 
     last_validation: ValidationResult | None = None
     pending_question: str | None = None
+    pending_application_message: str | None = None  # First-turn message to replay after consent
     application_id: str | None = None
     hgs_offered: bool = False
     hgs_accepted: bool | None = None

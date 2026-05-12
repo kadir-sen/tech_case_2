@@ -32,6 +32,14 @@ def consent_node(graph_state: GraphState) -> GraphState:
     intent = graph_state.extracted.intent if graph_state.extracted else IntentType.UNKNOWN
     if state.current_step == ConversationStep.START:
         state.current_step = ConversationStep.AWAITING_CONSENT
+        # If user opened the chat with a substantive request, remember the
+        # message so we can replay it after consent acceptance instead of
+        # silently dropping it.
+        if graph_state.extracted is not None and graph_state.extracted.intent in (
+            IntentType.START_APPLICATION,
+            IntentType.PROVIDE_INFO,
+        ):
+            state.pending_application_message = graph_state.user_message
         graph_state.add_reply(CONSENT_PROMPT)
         graph_state.add_action(ChatAction(type=ActionType.ASK_CONSENT))
         return graph_state
@@ -45,6 +53,16 @@ def consent_node(graph_state: GraphState) -> GraphState:
                 session_id=state.session_id,
                 customer_id=state.customer_id,
             )
+            # Replay the user's original first-turn message so we don't
+            # ask them to repeat themselves.
+            if state.pending_application_message:
+                graph_state.user_message = state.pending_application_message
+                state.pending_application_message = None
+                from app.chatbot.nodes.intent_node import get_default_extractor
+
+                graph_state.extracted = get_default_extractor().extract(
+                    graph_state.user_message, state
+                )
             return graph_state
         if intent == IntentType.REJECT:
             state.consent_status = ConsentStatus.REJECTED

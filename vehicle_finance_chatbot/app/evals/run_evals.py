@@ -110,6 +110,10 @@ def _evaluate(case: dict, result: dict, report: EvalReport) -> None:
         last_val = state.get("last_validation") or {}
         report.validation_correctness.record(cid, last_val.get("requires_guarantor") is True)
 
+    # Guardrail-triggered scenarios
+    if exp.get("guardrail_triggered"):
+        report.guardrails.record(cid, state.get("guardrail_triggered") is True)
+
 
 def _eval_faq_retrieval(report: EvalReport) -> None:
     retr = FaqRetriever.instance()

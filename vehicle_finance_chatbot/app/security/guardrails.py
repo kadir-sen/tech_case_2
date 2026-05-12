@@ -8,21 +8,30 @@ from dataclasses import dataclass
 _INJECTION_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
     re.compile(p, re.IGNORECASE)
     for p in (
+        # English
         r"ignore (all )?previous (instructions|prompt)",
         r"disregard (your|the) (instructions|prompt|rules)",
         r"reveal (the |your )?system prompt",
         r"show (me )?(the )?system prompt",
         r"act as (a )?(developer|admin|root)",
+        r"developer mode",
         r"jailbreak",
-        # Turkish variants
-        r"(\bönceki|tüm)\s+talimatlar(ı|i)\s+(unut|yok say|ignore)",
-        r"(kurallar(ı|i))\s+(yok say|by ?pass|aş)",
-        r"sistem promptunu (göster|ver|paylas)",
+        r"bypass (the )?(rules|limits|policy|restriction)",
+        # Turkish — instruction subversion
+        r"(\bönceki|tüm)\s+talimat(lar)?(ı|i)\s+(unut|yok say|ignore|bo[şs]ver)",
+        r"(kurallar(ı|i))\s+(yok say|by ?pass|aş|bo[şs]ver|unut)",
+        r"sistem promptunu (göster|ver|paylas|paylaş)",
         r"sistem talimat(ı|larını)",
         r"tüm müşterilerin (bilgi|tckn|veri)",
-        r"limit(leri|i)\s*(by ?pass|aş|yok say)",
-        r"select \* from",
+        r"limit(leri|i)\s*(by ?pass|aş|yok say|unut|bo[şs]ver|kaldır)",
+        r"admin moduna\s+(geç|gec)",
+        r"(geliştirici|gelistirici) moduna",
+        r"kurallar(ı|i)\s+bo[şs]ver",
+        r"kural(ı|i) (umursama|takma)",
+        # SQL/data extraction hints
+        r"select \*\s*from",
         r"drop table",
+        r"union\s+select",
     )
 )
 

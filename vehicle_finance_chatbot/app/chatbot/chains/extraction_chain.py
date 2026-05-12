@@ -17,11 +17,24 @@ from app.config import get_settings
 
 
 def _tr_lower(text: str) -> str:
-    """Lowercase Turkish text such that "İ"→"i" and "I"→"ı". We also strip
-    combining marks so substring checks work intuitively.
+    """Aggressive Turkish folding for trigger matching.
+
+    Folds: İ/I/ı → i, then lowercases, then strips combining marks (so ç→c,
+    ş→s, ğ→g, ö→o, ü→u). This is intentionally lossy — users typing
+    "nasil" should match a trigger written as "nasıl". Use only for
+    substring keyword detection, never for echo back to the user.
     """
-    out = text.replace("İ", "i").replace("I", "ı").lower()
+    out = (
+        text.replace("İ", "i")
+        .replace("I", "i")
+        .replace("ı", "i")
+        .lower()
+    )
     return "".join(c for c in unicodedata.normalize("NFD", out) if not unicodedata.combining(c))
+
+
+def _norm_tokens(words: tuple[str, ...]) -> tuple[str, ...]:
+    return tuple(_tr_lower(w) for w in words)
 from app.domain.date_utils import parse_date, parse_model_year
 from app.domain.enums import ConsentStatus, ConversationStep, FinanceType, IntentType
 from app.domain.money import parse_amount
@@ -34,44 +47,54 @@ from app.chatbot.prompts import SYSTEM_INTENT_EXTRACTION
 
 # --- Heuristics for the rule-based extractor ---
 
-_AFFIRM_WORDS = (
-    "evet",
-    "onayl",
-    "tamam",
-    "olur",
-    "kabul",
-    "kabul ediyorum",
-    "başvuruyu oluştur",
-    "yes",
-    "confirm",
+_AFFIRM_WORDS = _norm_tokens(
+    (
+        "evet",
+        "onayl",
+        "tamam",
+        "olur",
+        "kabul",
+        "kabul ediyorum",
+        "başvuruyu oluştur",
+        "yes",
+        "confirm",
+    )
 )
-_REJECT_WORDS = ("hayır", "iptal", "vazgeç", "reddet", "no", "cancel")
-_CONSENT_REJECT_WORDS = (
-    "kvkk istemiyorum",
-    "rıza vermiyorum",
-    "onay vermiyorum",
-    "reddediyorum",
+_REJECT_WORDS = _norm_tokens(("hayır", "iptal", "vazgeç", "reddet", "no", "cancel"))
+_CONSENT_REJECT_WORDS = _norm_tokens(
+    (
+        "kvkk istemiyorum",
+        "rıza vermiyorum",
+        "onay vermiyorum",
+        "reddediyorum",
+    )
 )
 
-_NEW_TOKENS = ("yeni", "sıfır", "0 km", "sifir", "0km")
-_USED_TOKENS = ("ikinci el", "2. el", "2.el", "2el", "ikinciel", "kullanılmış")
+_NEW_TOKENS = _norm_tokens(("yeni", "sıfır", "0 km", "sifir", "0km"))
+_USED_TOKENS = _norm_tokens(
+    ("ikinci el", "2. el", "2.el", "2el", "ikinciel", "kullanılmış", "ikinciel")
+)
 
-_FAQ_TRIGGERS = (
-    "nedir",
-    "ne kadar",
-    "kaç",
-    "nasıl",
-    "hangi",
-    "neden",
-    "limit",
-    "oran",
-    "faiz",
-    "yaş sınır",
-    "kefil ne zaman",
-    "ne zaman gerek",
-    "açıklar mısın",
-    "anlatır mısın",
-    "açıkla",
+_RESTART_TOKENS = _norm_tokens(("aslında", "yok aslında", "yok, "))
+
+_FAQ_TRIGGERS = _norm_tokens(
+    (
+        "nedir",
+        "ne kadar",
+        "kaç",
+        "nasıl",
+        "hangi",
+        "neden",
+        "limit",
+        "oran",
+        "faiz",
+        "yaş sınır",
+        "kefil ne zaman",
+        "ne zaman gerek",
+        "açıklar mısın",
+        "anlatır mısın",
+        "açıkla",
+    )
 )
 
 _TCKN_RE = re.compile(r"(?<!\d)([1-9]\d{10})(?!\d)")
@@ -243,23 +266,39 @@ class RuleBasedExtractor:
 
         # --- Confirmation while awaiting confirmation ---
         if state.current_step == ConversationStep.AWAITING_CONFIRMATION:
-            # Update request takes precedence over confirm.
-            field, new_val = _detect_update_request(text)
-            if field:
+            mentions_new = any(t in lower for t in _NEW_TOKENS)
+            mentions_used = any(t in lower for t in _USED_TOKENS)
+            is_restart = (
+                any(t in lower for t in _RESTART_TOKENS)
+                or mentions_new
+                or mentions_used
+            )
+            multi_amounts = len(_extract_amounts(text)) > 1
+            has_date = bool(re.search(r"\d{1,2}[./-]\d{1,2}[./-]\d{4}|\d{4}-\d{1,2}-\d{1,2}", text))
+
+            # Only short-circuit for atomic single-field corrections.
+            # Multi-field updates / finance-type switches / restarts fall
+            # through to full extraction below.
+            if not is_restart and not multi_amounts and not has_date:
+                field, new_val = _detect_update_request(text)
+                if field:
+                    out.intent = IntentType.UPDATE_FIELD
+                    out.field_to_update = field
+                    if new_val is not None:
+                        _apply_field_value(out, field, new_val)
+                    out.confidence = 0.85
+                    return out
+                if any(w in lower for w in _AFFIRM_WORDS):
+                    out.intent = IntentType.CONFIRM
+                    out.confidence = 0.95
+                    return out
+                if any(w in lower for w in _REJECT_WORDS):
+                    out.intent = IntentType.REJECT
+                    out.confidence = 0.9
+                    return out
+            # Restart/multi-field path → re-extraction
+            if is_restart:
                 out.intent = IntentType.UPDATE_FIELD
-                out.field_to_update = field
-                if new_val is not None:
-                    _apply_field_value(out, field, new_val)
-                out.confidence = 0.85
-                return out
-            if any(w in lower for w in _AFFIRM_WORDS):
-                out.intent = IntentType.CONFIRM
-                out.confidence = 0.95
-                return out
-            if any(w in lower for w in _REJECT_WORDS):
-                out.intent = IntentType.REJECT
-                out.confidence = 0.9
-                return out
 
         # --- HGS decision ---
         if state.current_step == ConversationStep.AWAITING_HGS_DECISION:

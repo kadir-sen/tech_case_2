@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.auth.mock_customer_store import get_customer_tckn
 from app.chatbot.state import GraphState
 from app.domain.date_utils import compute_vehicle_age
 from app.domain.enums import FinanceType
@@ -24,8 +25,26 @@ def field_extraction_node(graph_state: GraphState) -> GraphState:
     updated: list[str] = []
 
     if ex.finance_type and fields.finance_type != ex.finance_type:
+        previous = fields.finance_type
         fields.finance_type = ex.finance_type
         updated.append("finance_type")
+        # Clear stale fields from the opposing branch so summaries and
+        # validation can't mix NEW and USED data.
+        if previous is not None:
+            if ex.finance_type == FinanceType.USED:
+                fields.invoice_value = None
+                fields.vehicle_model = None
+                fields.guarantor_tckn = None
+            else:
+                fields.casco_value = None
+                fields.registration_date = None
+                fields.vehicle_age = None
+                fields.model_year = None
+                fields.seller_tckn = None
+                fields.seller_tckn_intent_skipped = False
+                fields.approximate_age_requires_confirmation = False
+            state.last_validation = None
+            state.application_id = None
 
     if ex.invoice_value is not None and ex.invoice_value > 0:
         if fields.invoice_value != ex.invoice_value:
@@ -64,11 +83,15 @@ def field_extraction_node(graph_state: GraphState) -> GraphState:
         updated.append("model_year")
 
     if ex.guarantor_tckn:
-        if is_valid_tckn(ex.guarantor_tckn):
+        if not is_valid_tckn(ex.guarantor_tckn):
+            graph_state.metadata["invalid_guarantor_tckn"] = True
+        elif ex.guarantor_tckn == get_customer_tckn(state.customer_id):
+            # Customer entered their own TCKN as guarantor. This is a
+            # compliance violation — a guarantor must be a different person.
+            graph_state.metadata["self_as_guarantor"] = True
+        else:
             fields.guarantor_tckn = ex.guarantor_tckn
             updated.append("guarantor_tckn")
-        else:
-            graph_state.metadata["invalid_guarantor_tckn"] = True
 
     if ex.seller_tckn:
         if is_valid_tckn(ex.seller_tckn):

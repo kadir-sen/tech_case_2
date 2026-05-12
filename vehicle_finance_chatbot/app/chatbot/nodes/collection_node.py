@@ -49,6 +49,14 @@ def collection_node(graph_state: GraphState) -> GraphState:
         graph_state.add_action(ChatAction(type=ActionType.ASK_FIELD, field="guarantor_tckn"))
         return graph_state
 
+    if graph_state.metadata.get("self_as_guarantor"):
+        graph_state.add_reply(
+            "Verdiğiniz TCKN sizin kendi TCKN bilginiz görünüyor. "
+            "Kefil olarak farklı bir kişinin TCKN bilgisini paylaşır mısınız?"
+        )
+        graph_state.add_action(ChatAction(type=ActionType.ASK_FIELD, field="guarantor_tckn"))
+        return graph_state
+
     if graph_state.metadata.get("invalid_seller_tckn"):
         graph_state.add_reply(
             "Satıcı TCKN bilgisi geçersiz görünüyor. Doğru TCKN'yi paylaşabilir veya "
