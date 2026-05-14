@@ -8,10 +8,17 @@ _extractor = None
 
 
 def get_default_extractor():
+    """Lazy singleton — testler monkeypatch'le sıfırlamak için
+    ``reset_default_extractor()`` kullanabilir."""
     global _extractor
     if _extractor is None:
         _extractor = get_extractor()
     return _extractor
+
+
+def reset_default_extractor() -> None:
+    global _extractor
+    _extractor = None
 
 
 def intent_node(graph_state: GraphState) -> GraphState:

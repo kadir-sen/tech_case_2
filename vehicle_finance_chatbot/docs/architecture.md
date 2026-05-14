@@ -5,18 +5,25 @@
 ```mermaid
 flowchart LR
     MOB[Mobile Banking App] -->|X-Customer-Id| BFF[BFF / API Gateway]
-    BFF -->|POST /chat| API[FastAPI]
+    BFF -->|POST /chat/session| API[FastAPI]
+    BFF -->|POST /chat + edited_fields| API
+    API --> GREET[greeting_node<br/>template: ad + gender → 'Bey/Hanım']
     API --> ORCH[LangGraph Orchestrator]
-    ORCH --> EXT[Intent + Field Extractor<br/>LLM or RuleBased]
-    ORCH --> RAG[FAQ Retriever<br/>FAISS / Qdrant]
-    ORCH --> RULES[Deterministic Rules]
+    ORCH --> EXT[LLM Intent + Field Extractor<br/>Pydantic structured output]
+    ORCH --> RAG[FAQ Retriever<br/>FAISS / Qdrant + RAG]
+    ORCH --> RULES[Deterministic Rules<br/>rules.py limit/oran/kefil]
+    ORCH --> RESP[Response Generation<br/>validation → doğal Türkçe]
+    ORCH --> FUZZ[rapidfuzz vehicle catalog]
     ORCH --> SEC[Guardrails + PII Mask]
     ORCH --> DB[(SQLAlchemy)]
-    EXT --> LLM[(vLLM / Ollama<br/>OpenAI-compatible)]
+    EXT --> GW[LiteLLM Gateway<br/>routing + budget + customer quota]
+    RESP --> GW
+    GW --> LLM[(vLLM / Ollama<br/>OpenAI-compatible)]
     DB --> AUD[(audit_logs)]
     DB --> APP[(vehicle_finance_applications)]
     DB --> CONV[(conversation_states)]
     DB --> HGS[(hgs_leads)]
+    DB --> USE[(llm_usage_logs<br/>customer abuse tracking)]
 ```
 
 ## 2. LangGraph Workflow (per turn)
@@ -27,10 +34,7 @@ flowchart TD
     LS --> GR[guardrail]
     GR -->|blocked| END([END w/ safe reply])
     GR --> INT[intent_node]
-    INT --> CON[consent_node]
-    CON -->|consent rejected| END
-    CON -->|awaiting consent| END
-    CON --> RI[route_intent]
+    INT --> RI[route_intent]
     RI -->|FAQ| FAQ[faq_router_node] --> END
     RI -->|CANCEL| C[cancel] --> END
     RI -->|HGS decision| HD[hgs_decision_node] --> END

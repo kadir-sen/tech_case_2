@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
 
 from app.auth.session_context import require_customer
 from app.chatbot.graph import run_turn
+from app.chatbot.nodes.greeting_node import greeting_node
 from app.chatbot.state import GraphState
 from app.domain.schemas import (
     ChatRequest,
@@ -19,14 +23,97 @@ _conv_repo = ConversationRepository()
 _app_repo = ApplicationRepository()
 
 
+_ALLOWED_EDIT_FIELDS = {
+    "invoice_value",
+    "casco_value",
+    "vehicle_model",
+    "requested_amount",
+    "registration_date",
+    "guarantor_tckn",
+    "seller_tckn",
+}
+
+
+def _merge_edited_fields(state: ConversationStateModel, payload: dict) -> None:
+    """UI'dan gelen düzeltmeleri ApplicationFields'a aktarır.
+
+    Sadece allowlist'teki alanlar kabul edilir; tipler Pydantic tarafından
+    yeniden valide edilir. Mevcut last_validation sıfırlanır ki graph
+    validation node'u yeniden koşsun."""
+    from datetime import date
+
+    fields = state.fields
+    changed = False
+    for key, value in payload.items():
+        if key not in _ALLOWED_EDIT_FIELDS:
+            continue
+        if value in ("", None):
+            setattr(fields, key, None)
+            changed = True
+            continue
+        try:
+            if key in ("invoice_value", "casco_value", "requested_amount"):
+                setattr(fields, key, float(value))
+            elif key == "registration_date":
+                if isinstance(value, str):
+                    setattr(fields, key, date.fromisoformat(value))
+                else:
+                    setattr(fields, key, value)
+            else:
+                setattr(fields, key, str(value))
+            changed = True
+        except (ValueError, TypeError):
+            # Geçersiz tip — sessizce atla; graph akışı normal validation'ı
+            # koşar ve kullanıcıya tekrar sorar.
+            continue
+    if changed:
+        state.last_validation = None
+
+
 def _state_view(state: ConversationStateModel) -> ChatStateView:
     return ChatStateView(
         current_step=state.current_step,
         finance_type=state.fields.finance_type,
-        consent_status=state.consent_status,
         missing_fields=(state.last_validation.missing_fields if state.last_validation else []),
         validation_errors=(state.last_validation.errors if state.last_validation else []),
         application_id=state.application_id,
+    )
+
+
+class SessionInitRequest(BaseModel):
+    session_id: str | None = None
+
+
+@router.post("/chat/session", response_model=ChatResponse)
+def init_session(
+    body: SessionInitRequest | None = None,
+    customer: CustomerProfile = Depends(require_customer),
+) -> ChatResponse:
+    """Chatbot açıldığında çağrılır. Greeting üretir, session yaratır,
+    state'i persist eder. Kullanıcı mesajı GEREKMEZ."""
+    session_id = (body.session_id if body else None) or f"sess-{uuid.uuid4().hex[:12]}"
+
+    existing = _conv_repo.load(session_id)
+    if existing is not None and existing.customer_id and existing.customer_id != customer.customer_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Session belongs to a different customer.",
+        )
+
+    state = existing or ConversationStateModel(session_id=session_id, customer_id=customer.customer_id)
+    state.customer_id = customer.customer_id
+
+    gs = GraphState(user_message="", state=state, customer=customer)
+    greeting_node(gs)
+
+    state.history.append({"role": "assistant", "text": gs.reply()[:1000]})
+    _conv_repo.save(state)
+
+    return ChatResponse(
+        session_id=state.session_id,
+        reply=gs.reply(),
+        state=_state_view(state),
+        actions=gs.actions,
     )
 
 
@@ -47,11 +134,18 @@ def chat(
             )
         state.customer_id = customer.customer_id
 
+    # UI'ın özet tablosundan gelen düzeltmeler — graph akışına girmeden önce
+    # alanlara merge edilir. Validation graph içinde her durumda yeniden
+    # koşar; istemci-tarafı manipülasyon güvenli değildir.
+    if req.edited_fields:
+        _merge_edited_fields(state, req.edited_fields)
+
     gs = GraphState(
         user_message=req.message,
         state=state,
         customer=customer,
         idempotency_key=req.idempotency_key,
+        edited_fields=req.edited_fields,
     )
     run_turn(gs)
 

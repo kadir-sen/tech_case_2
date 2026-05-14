@@ -6,37 +6,44 @@
 
 ```
 START
-  -> AWAITING_CONSENT
-       -> SAFE_EXIT (rıza yok)
-       -> AWAITING_INTENT (rıza alındı)
+  -> GREETED              (POST /chat/session — chatbot açıldığında)
+  -> AWAITING_INTENT
   -> AWAITING_FINANCE_TYPE
   -> COLLECTING_FIELDS
   -> VALIDATING
   -> AWAITING_FIELD_FIX
-  -> AWAITING_CONFIRMATION
+  -> AWAITING_CONFIRMATION  (UI inline-editable summary tablo render)
   -> PERSISTED
   -> AWAITING_HGS_DECISION
   -> COMPLETED
   -> HANDOFF (insan transferi)
 ```
 
+Müşteri mobil bankacılıkta zaten authenticated olduğu için ayrı bir
+rıza adımı yoktur; sözleşmesel KVKK onayı login sırasında alınır.
+
+Chatbot açılır açılmaz `POST /chat/session` çağrılır; greeting
+customer-master'dan gelen `full_name` ve `gender` bilgileriyle
+**deterministic template** üzerinden üretilir (LLM çağrısı yok) ve
+`GREETED` step'e geçilir. Kullanıcı mesaj göndermeden önce de
+selamlama görür.
+
 ## Tipik Yollar
 
 ### Yeni araç happy path
 
-| Step | User input | Step changes to |
-|------|-----------|-----------------|
-| START | "merhaba" | AWAITING_CONSENT |
-| AWAITING_CONSENT | "Evet" | AWAITING_INTENT |
-| AWAITING_INTENT | "Yeni araç. Toyota Corolla, 4 milyon, 2 milyon istiyorum" | AWAITING_CONFIRMATION |
-| AWAITING_CONFIRMATION | "Evet onaylıyorum" | PERSISTED → AWAITING_HGS_DECISION |
-| AWAITING_HGS_DECISION | "Evet" | COMPLETED |
+| Step | Event | Step changes to |
+|------|-------|-----------------|
+| START | `POST /chat/session` | GREETED (greeting üretildi) |
+| GREETED | User: "Yeni araç. Toyota Corolla, 4 milyon, 2 milyon istiyorum" | AWAITING_CONFIRMATION (summary tablo render) |
+| AWAITING_CONFIRMATION | UI: Onayla butonu (opsiyonel `edited_fields`) | PERSISTED → AWAITING_HGS_DECISION |
+| AWAITING_HGS_DECISION | User: "Evet" | COMPLETED |
 
 ### Validation hatasından düzeltme
 
 | Step | User input | Step changes to |
 |------|-----------|-----------------|
-| AWAITING_INTENT | "Yeni. Corolla, 4 milyon, 3 milyon istiyorum" | AWAITING_FIELD_FIX (60% limit aşımı) |
+| START | "Yeni. Corolla, 4 milyon, 3 milyon istiyorum" | AWAITING_FIELD_FIX (60% limit aşımı) |
 | AWAITING_FIELD_FIX | "Tutarı 2 milyon yap" | AWAITING_CONFIRMATION |
 
 ### FAQ mid-flow
@@ -63,7 +70,6 @@ Müşteri uygulamayı kapatıp geri geldiğinde:
 
 - Önceki `current_step`'ten devam eder.
 - Daha önce toplanmış alanlar yeniden sorulmaz.
-- KVKK rızası bir kere alındığı için tekrar sorulmaz.
 
 ## HGS Cross-sell
 

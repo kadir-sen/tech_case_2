@@ -22,7 +22,9 @@ os.environ.setdefault("LLM_PROVIDER", "mock")
 os.environ.setdefault("AUDIT_LOG_PATH", str(Path(tempfile.gettempdir()) / "vfc_eval_audit.log"))
 
 from app.auth.mock_customer_store import get_customer  # noqa: E402
+from app.chatbot.chains.dev_extractor import StubExtractor  # noqa: E402
 from app.chatbot.graph import run_turn  # noqa: E402
+from app.chatbot.nodes import intent_node as _intent_module  # noqa: E402
 from app.chatbot.state import GraphState  # noqa: E402
 from app.domain.enums import FinanceType  # noqa: E402
 from app.domain.schemas import ConversationStateModel  # noqa: E402
@@ -33,6 +35,8 @@ from app.rag.retriever import FaqRetriever  # noqa: E402
 from app.security.guardrails import check_user_input  # noqa: E402
 
 init_db()
+# Eval suite gerçek LLM olmadan koşar; stub extractor monkey-patch.
+_intent_module._extractor = StubExtractor()
 
 _repo = ConversationRepository()
 
@@ -96,8 +100,6 @@ def _evaluate(case: dict, result: dict, report: EvalReport) -> None:
     for k in ("requested_amount", "casco_value", "invoice_value"):
         if k in exp:
             field_checks.append(state.get("fields", {}).get(k) == exp[k])
-    if "seller_tckn_skipped" in exp:
-        field_checks.append(state.get("fields", {}).get("seller_tckn_intent_skipped") == exp["seller_tckn_skipped"])
     if field_checks:
         report.field_extraction.record(cid, all(field_checks))
 

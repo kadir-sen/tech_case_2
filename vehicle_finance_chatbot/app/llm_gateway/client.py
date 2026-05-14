@@ -24,12 +24,14 @@ from app.llm_gateway.budget import fit_to_budget
 from app.llm_gateway.exceptions import (
     BudgetExceededError,
     CloudFallbackDisabledError,
+    CustomerBudgetExceededError,
     ProviderError,
 )
 from app.llm_gateway.routing_policy import get_policy
 from app.llm_gateway.schemas import LLMResponse, NodePolicy, TokenUsage
 from app.llm_gateway.token_counter import count_tokens
-from app.llm_gateway.usage_logger import log_usage
+from app.llm_gateway.usage_logger import hash_customer, log_usage
+from app.persistence.repositories import LLMUsageRepository
 
 
 # Placeholder per-1K-token prices. Real values come from LiteLLM's
@@ -106,6 +108,38 @@ class LLMGatewayClient:
     def __init__(self, *, backend: Backend | None = None) -> None:
         self._settings = get_settings()
         self._backend = backend or _default_litellm_backend
+        self._usage_repo = LLMUsageRepository()
+
+    def _enforce_customer_budget(self, customer_id: str | None) -> None:
+        """Customer için sliding-window token kontrolü.
+
+        Misuse / abuse erken uyarı katmanı: chatbot'u kapsam dışı görevlerde
+        (kod yazdırma, uzun yaratıcı içerik vb.) kullanmaya çalışan müşteri
+        kümülatif token'da hızlı patlar. Kontrol persistence DB'sine
+        dayanır; gateway'in mocklandığı testlerde de doğal olarak çalışır."""
+        hour_limit = self._settings.max_tokens_per_customer_hourly
+        day_limit = self._settings.max_tokens_per_customer_daily
+        if not customer_id or (hour_limit <= 0 and day_limit <= 0):
+            return
+        cid_hash = hash_customer(customer_id)
+        if hour_limit > 0:
+            used_hour = self._usage_repo.tokens_used_for_customer(cid_hash, 3600)
+            if used_hour >= hour_limit:
+                raise CustomerBudgetExceededError(
+                    f"customer hourly token quota exhausted (used={used_hour}, limit={hour_limit})",
+                    window="1h",
+                    used_tokens=used_hour,
+                    limit=hour_limit,
+                )
+        if day_limit > 0:
+            used_day = self._usage_repo.tokens_used_for_customer(cid_hash, 86_400)
+            if used_day >= day_limit:
+                raise CustomerBudgetExceededError(
+                    f"customer daily token quota exhausted (used={used_day}, limit={day_limit})",
+                    window="24h",
+                    used_tokens=used_day,
+                    limit=day_limit,
+                )
 
     @property
     def enabled(self) -> bool:
@@ -130,6 +164,9 @@ class LLMGatewayClient:
         conversation_step: str | None = None,
     ) -> LLMResponse:
         policy = get_policy(node_purpose)
+
+        # Customer budget — kullanıcı bazlı sliding window kontrolü.
+        self._enforce_customer_budget(customer_id)
 
         # Cloud routing guard — must come BEFORE provider call.
         if policy.model_alias in _CLOUD_ALIASES and not self._settings.enable_cloud_fallback:

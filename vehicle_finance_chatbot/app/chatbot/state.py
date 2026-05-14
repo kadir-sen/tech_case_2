@@ -24,6 +24,7 @@ class GraphState:
     state: ConversationStateModel
     customer: CustomerProfile | None = None
     idempotency_key: str | None = None
+    edited_fields: dict[str, Any] | None = None
 
     extracted: ExtractedFields | None = None
     reply_parts: list[str] = field(default_factory=list)

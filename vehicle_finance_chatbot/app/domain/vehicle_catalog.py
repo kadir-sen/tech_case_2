@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from rapidfuzz import fuzz, process
+
 from app.domain.enums import VehicleClass
 
 
@@ -37,28 +39,6 @@ _CATALOG: tuple[VehicleModel, ...] = (
     VehicleModel("Iveco Daily", "iveco_daily", "Iveco", "IVCO-DAILY", VehicleClass.COMMERCIAL),
 )
 
-# Heuristic keywords that strongly suggest a commercial vehicle when the model
-# is not found in the catalog. Used only to flag for clarification — never as
-# a final rejection without catalog confirmation.
-_COMMERCIAL_HINTS: tuple[str, ...] = (
-    "transit",
-    "sprinter",
-    "doblo",
-    "crafter",
-    "kangoo",
-    "kamyon",
-    "kamyonet",
-    "minibüs",
-    "minibus",
-    "panelvan",
-    "panel van",
-    "daily",
-    "ducato",
-    "boxer",
-    "jumper",
-)
-
-
 def normalize_vehicle_model(vehicle_model: str | None) -> str:
     if not vehicle_model:
         return ""
@@ -72,6 +52,8 @@ def normalize_vehicle_model(vehicle_model: str | None) -> str:
 
 
 def lookup_vehicle_model(vehicle_model: str | None) -> VehicleModel | None:
+    """Substring tabanlı eski yol — testlerde basit eşleşme için korunur.
+    Yazım hatalarına dirençli arama için ``resolve_vehicle_model`` kullanın."""
     norm = normalize_vehicle_model(vehicle_model)
     if not norm:
         return None
@@ -81,20 +63,84 @@ def lookup_vehicle_model(vehicle_model: str | None) -> VehicleModel | None:
     return None
 
 
-def is_commercial_model(vehicle_model: str | None) -> bool:
-    """True only if catalog confirms COMMERCIAL. Unknown models return False
-    here; the caller should branch on `is_unknown_model` for clarification.
+# rapidfuzz threshold — bu skorun altındaki eşleşmeler "düşük güven" sayılır;
+# çağıran katman LLM disambiguation yapabilir veya kullanıcıya yeniden sorar.
+# 80 eşiği "Tyota Korola" gibi makul yazım hatalarını yakalar; rastgele
+# girdileri ("Lada Niva") düşük güven olarak işaretler.
+_FUZZY_CONFIDENT_THRESHOLD = 80
+_FUZZY_CANDIDATE_THRESHOLD = 60
+
+
+@dataclass(frozen=True)
+class VehicleResolution:
+    model: VehicleModel | None
+    confidence: float  # 0..100
+    is_confident: bool
+    raw_input: str
+
+
+def _catalog_normalized_names() -> dict[str, VehicleModel]:
+    return {m.normalized_model_name.replace("_", " "): m for m in _CATALOG}
+
+
+def resolve_vehicle_model(vehicle_model: str | None) -> VehicleResolution:
+    """Yazım hatalarına dirençli model çözümleme.
+
+    1. Önce exact / substring eşleşmesi denenir.
+    2. Bulunamazsa rapidfuzz ile en yakın katalog adayı seçilir.
+    3. Güven skoru eşiğe göre ``is_confident`` True/False döner — düşükse
+       caller LLM disambiguation veya yeniden sorma akışı uygulamalıdır.
     """
-    model = lookup_vehicle_model(vehicle_model)
-    return model is not None and model.vehicle_class == VehicleClass.COMMERCIAL
-
-
-def is_unknown_model(vehicle_model: str | None) -> bool:
-    return lookup_vehicle_model(vehicle_model) is None
-
-
-def has_commercial_hint(vehicle_model: str | None) -> bool:
     if not vehicle_model:
-        return False
-    lower = vehicle_model.lower()
-    return any(h in lower for h in _COMMERCIAL_HINTS)
+        return VehicleResolution(model=None, confidence=0.0, is_confident=False, raw_input="")
+
+    direct = lookup_vehicle_model(vehicle_model)
+    if direct is not None:
+        return VehicleResolution(
+            model=direct,
+            confidence=100.0,
+            is_confident=True,
+            raw_input=vehicle_model,
+        )
+
+    normalized = normalize_vehicle_model(vehicle_model).replace("_", " ")
+    candidates = _catalog_normalized_names()
+    match = process.extractOne(
+        normalized,
+        list(candidates.keys()),
+        scorer=fuzz.WRatio,
+    )
+    if match is None:
+        return VehicleResolution(model=None, confidence=0.0, is_confident=False, raw_input=vehicle_model)
+    candidate_key, score, _ = match
+    if score < _FUZZY_CANDIDATE_THRESHOLD:
+        return VehicleResolution(model=None, confidence=float(score), is_confident=False, raw_input=vehicle_model)
+    chosen = candidates[candidate_key]
+    return VehicleResolution(
+        model=chosen,
+        confidence=float(score),
+        is_confident=score >= _FUZZY_CONFIDENT_THRESHOLD,
+        raw_input=vehicle_model,
+    )
+
+
+def is_commercial_model(vehicle_model: str | None) -> bool:
+    """True only if catalog confirms COMMERCIAL (with fuzzy resolve).
+
+    Bilinmeyen / düşük güvenli modeller False döner; sadece kataloğa
+    kayıtlı ticari modeller reddedilir.
+    """
+    resolution = resolve_vehicle_model(vehicle_model)
+    return (
+        resolution.model is not None
+        and resolution.is_confident
+        and resolution.model.vehicle_class == VehicleClass.COMMERCIAL
+    )
+
+
+def canonical_name(vehicle_model: str | None) -> str | None:
+    """Resolve confidence yüksekse canonical katalog adını döndürür."""
+    resolution = resolve_vehicle_model(vehicle_model)
+    if resolution.is_confident and resolution.model is not None:
+        return resolution.model.model_name
+    return None

@@ -13,6 +13,7 @@ from app.llm_gateway.client import LLMGatewayClient, get_gateway_client  # noqa:
 from app.llm_gateway.exceptions import (  # noqa: F401
     BudgetExceededError,
     CloudFallbackDisabledError,
+    CustomerBudgetExceededError,
     GatewayError,
     ProviderError,
     RoutingError,

@@ -254,3 +254,84 @@ class LLMUsageRepository:
                 "total_cost_usd": round(sum(b["estimated_cost_usd"] for b in buckets), 6),
                 "by_model_and_node": buckets,
             }
+
+    def tokens_used_for_customer(
+        self, customer_id_hash: str | None, window_seconds: int
+    ) -> int:
+        """Customer'ın son ``window_seconds`` içinde tükettiği toplam token.
+        Hash sözleşmesi: ``usage_logger.hash_customer`` ile aynı."""
+        if not customer_id_hash:
+            return 0
+        from datetime import timedelta
+
+        from sqlalchemy import func
+
+        cutoff = datetime.utcnow() - timedelta(seconds=window_seconds)
+        with get_session() as s:
+            value = (
+                s.query(func.coalesce(func.sum(LLMUsageLog.total_tokens), 0))
+                .filter(LLMUsageLog.customer_id_hash == customer_id_hash)
+                .filter(LLMUsageLog.created_at >= cutoff)
+                .scalar()
+            )
+            return int(value or 0)
+
+    def customer_usage_summary(
+        self, customer_id_hash: str | None, *, recent_limit: int = 20
+    ) -> dict[str, Any]:
+        from datetime import timedelta
+
+        from sqlalchemy import func
+
+        if not customer_id_hash:
+            return {"customer_id_hash": None, "total_tokens": 0, "calls": 0, "recent": []}
+
+        now = datetime.utcnow()
+        with get_session() as s:
+            total = (
+                s.query(
+                    func.count(LLMUsageLog.id),
+                    func.coalesce(func.sum(LLMUsageLog.total_tokens), 0),
+                    func.coalesce(func.sum(LLMUsageLog.estimated_cost_usd), 0.0),
+                )
+                .filter(LLMUsageLog.customer_id_hash == customer_id_hash)
+                .one()
+            )
+            last_1h = (
+                s.query(func.coalesce(func.sum(LLMUsageLog.total_tokens), 0))
+                .filter(LLMUsageLog.customer_id_hash == customer_id_hash)
+                .filter(LLMUsageLog.created_at >= now - timedelta(hours=1))
+                .scalar()
+            )
+            last_24h = (
+                s.query(func.coalesce(func.sum(LLMUsageLog.total_tokens), 0))
+                .filter(LLMUsageLog.customer_id_hash == customer_id_hash)
+                .filter(LLMUsageLog.created_at >= now - timedelta(hours=24))
+                .scalar()
+            )
+            recent = (
+                s.query(LLMUsageLog)
+                .filter(LLMUsageLog.customer_id_hash == customer_id_hash)
+                .order_by(LLMUsageLog.created_at.desc())
+                .limit(recent_limit)
+                .all()
+            )
+            return {
+                "customer_id_hash": customer_id_hash,
+                "calls": int(total[0] or 0),
+                "total_tokens": int(total[1] or 0),
+                "estimated_cost_usd": round(float(total[2] or 0.0), 6),
+                "tokens_last_1h": int(last_1h or 0),
+                "tokens_last_24h": int(last_24h or 0),
+                "recent": [
+                    {
+                        "created_at": r.created_at.isoformat() + "Z",
+                        "node_purpose": r.node_purpose,
+                        "model_name": r.model_name,
+                        "total_tokens": r.total_tokens,
+                        "estimated_cost_usd": float(r.estimated_cost_usd or 0.0),
+                        "fallback_used": r.fallback_used,
+                    }
+                    for r in recent
+                ],
+            }

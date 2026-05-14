@@ -18,7 +18,7 @@ python -m app.evals.run_evals
 | Metrik | Açıklama | Eşik |
 |--------|----------|------|
 | `intent_accuracy` | finance_type doğruluğu | (raporlanır) |
-| `field_extraction` | requested_amount / casco_value / invoice_value / seller_tckn_skipped | (raporlanır) |
+| `field_extraction` | requested_amount / casco_value / invoice_value | (raporlanır) |
 | `validation_correctness` | beklenen rejection veya max_allowed_amount doğru | 1.0 (sert) |
 | `faq_retrieval` | top-3 hit içinde beklenen anahtar geçiyor | (raporlanır) |
 | `end_to_end_completion` | senaryo başarısı (application yaratıldı/yaratılmadı doğru) | 0.95 |
@@ -31,7 +31,7 @@ eşik; biri %100'ün altına düşerse run fail eder.
 ## Dataset
 
 ### `conversations.jsonl`
-14 senaryo:
+Senaryolar:
 1. Yeni araç valid
 2. Yeni araç 7M üzeri rejection
 3. Yeni araç 5M üzeri kefil gerekli
@@ -41,11 +41,13 @@ eşik; biri %100'ün altına düşerse run fail eder.
 7. İkinci el 5 yaş üstü rejection
 8. İkinci el %40 limit aşımı
 9. İkinci el 3M üst barem
-10. Satıcı TCKN skip
-11. FAQ mid-flow
-12. Final summary sonrası field update
-13. İki kere onay idempotent
-14. Resume after close
+10. FAQ mid-flow
+11. Final summary sonrası field update
+12. İki kere onay idempotent
+13. Resume after close
+14. Türkçe rakam parsing
+15. Final summary'de kısa düzeltme
+16. Kural bypass denemesi (guardrail)
 
 ### `adversarial.jsonl`
 6 mesaj:

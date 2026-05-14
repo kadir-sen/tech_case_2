@@ -24,36 +24,38 @@ mobile app -> Chat API (FastAPI)
                 |
    +------------+------------+------------+--------------+
    |            |            |            |              |
-guardrail   intent /        consent      RAG /           idempotent
-filter      structured      flow         FAQ retriever   DB write
-            extractor                                    (SQLAlchemy)
+guardrail   intent /        RAG /         idempotent     audit +
+filter      structured      FAQ           DB write       PII
+            extractor       retriever     (SQLAlchemy)   masking
                 |
                 v
     deterministic rules engine
     (NEW / USED validators)
-                |
-                v
-        audit + PII masking
 ```
 
 Detaylı diagram için [docs/architecture.md](docs/architecture.md).
 
 ### Yapı Taşı Kararları (özet)
 
-- **LLM karar vermez.** Limit, kefil zorunluluğu, yaş üst sınırı,
-  ticari/binek kontrolü, idempotency, DB yazımı tamamen
-  `app/domain/rules.py` ve `app/security/*` içinde deterministic kod
-  olarak çalışır. LLM yalnızca niyet anlama, doğal dilden alan çıkarma
-  ve FAQ cevabı üretme için kullanılır.
-- **Mock-first LLM.** `LLM_PROVIDER=mock` modunda sistem tamamen
-  bağımsız `RuleBasedExtractor` + `HashEmbedder` ile çalışır. Bu sayede
-  testler ve evaller harici bağımlılık olmadan koşar. Prod için vLLM
-  veya Ollama OpenAI-compatible endpoint'e geçilir.
+- **LLM-first konuşma, deterministic kurallar.** Niyet anlama,
+  alan çıkarımı, greeting üretimi, validation hata mesajı yumuşatma ve
+  FAQ cevabı LLM ile yapılır. Limit / kefil zorunluluğu / yaş üst sınırı /
+  ticari kontrol / TCKN checksum / idempotency / DB yazımı tamamen
+  `app/domain/rules.py` ve `app/security/*` içinde **deterministic kod**
+  olarak kalır — LLM bu sayıları üretmez, yalnızca müşteriye iletir.
+- **vLLM / Ollama on-prem inference.** 96 GB GPU (2×48) ile Qwen2.5-72B-AWQ
+  large alias, 14B small alias. LiteLLM gateway tüm çağrıları yönlendirir,
+  per-node token budget enforce eder, customer-bazlı sliding-window
+  kullanım kontrolü yapar.
+- **Test & demo için stub extractor.** Production yolu yalnızca
+  `LLMExtractor`. CI'da ve `scripts/demo_conversation.py` içinde
+  `app/chatbot/chains/dev_extractor.py:StubExtractor` keyword-based
+  deterministic akış yürütür — gerçek LLM olmadan end-to-end test edilebilir.
 - **Auth context dışarıdan.** `X-Customer-Id` header'ı BFF'den gelir;
   müşteri profili mock store'da. Production'da bu auth katmanı bankanın
-  customer-master servisine bağlanır.
-- **KVKK consent ilk adımdır.** Onay alınmadan kefil/satıcı TCKN
-  toplanmaz ve DB'ye başvuru yazılmaz.
+  customer-master servisine bağlanır. KVKK açık rızası mobil bankacılık
+  login adımında sözleşmesel olarak alınır; chatbot içinde tekrar bir
+  rıza adımı yoktur.
 - **State JSON olarak persisted.** `ConversationStateModel` her turn'de
   yüklenir/kaydedilir; resume akışı destekler.
 - **Idempotency.** Aynı session + idempotency_key (veya default
@@ -72,7 +74,8 @@ cd vehicle_finance_chatbot
 python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# .env içinden LLM_PROVIDER=mock bırakırsanız LLM'siz çalışır.
+# Production için LLM_GATEWAY_ENABLED=true + LiteLLM proxy gerekli.
+# Test/demo akışı için stub extractor monkey-patch ile gerçek LLM olmadan koşar.
 uvicorn app.main:app --reload --port 8080
 ```
 
@@ -133,10 +136,13 @@ LLM_BASE_URL=http://localhost:11434/v1
 LLM_MODEL=qwen2.5:14b-instruct
 ```
 
-### Mock (test/CI)
+### Stub (test/CI/demo)
 
-`LLM_PROVIDER=mock`. Sistem regex/heuristic tabanlı extractor
-kullanır. Tüm testler ve evaller bu modda 100% geçer.
+Production yolu yalnızca `LLMExtractor`. CI ve demo için
+`app/chatbot/chains/dev_extractor.py:StubExtractor` deterministic akış
+yürütür. `tests/conftest.py` ve `scripts/demo_conversation.py` modülü
+monkey-patch ile bağlar — gerçek LLM olmadan tüm testler ve evaller
+100% geçer.
 
 ### Model Seçim Kriterleri
 
@@ -173,44 +179,49 @@ Case'in sağladığı 2×48 GB = 96 GB GPU bütçesi göz önüne alındığınd
 ### Tipik akış
 
 ```bash
-# Turn 1 — KVKK consent'i tetikle
-curl -X POST http://localhost:8080/chat \
-  -H "Content-Type: application/json" \
-  -H "X-Customer-Id: CUST001" \
-  -d '{"session_id":"s1","message":"merhaba"}'
+# Turn 0 — chatbot açılır, greeting üretilir
+curl -X POST http://localhost:8080/chat/session \
+  -H "X-Customer-Id: CUST001"
+# → {"session_id":"sess-abc...", "reply":"Merhaba Ayşe Hanım, taşıt finansmanı...", ...}
 
-# Turn 2 — onay ver
-curl -X POST http://localhost:8080/chat \
-  -H "Content-Type: application/json" \
-  -H "X-Customer-Id: CUST001" \
-  -d '{"session_id":"s1","message":"Evet, kabul ediyorum"}'
-
-# Turn 3 — başvuru
+# Turn 1 — başvuru
 curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
   -H "X-Customer-Id: CUST001" \
   -d '{
-    "session_id":"s1",
+    "session_id":"sess-abc...",
     "message":"Yeni araç için başvuru yapacağım. Toyota Corolla, fatura 4 milyon, 2 milyon finansman istiyorum.",
-    "idempotency_key":"msg-3"
+    "idempotency_key":"msg-1"
   }'
 
-# Turn 4 — özet üzerine onay
+# Turn 2 — kullanıcı özet tablosunda finansmanı düzeltip onayladı
 curl -X POST http://localhost:8080/chat \
   -H "Content-Type: application/json" \
   -H "X-Customer-Id: CUST001" \
-  -d '{"session_id":"s1","message":"Evet onaylıyorum","idempotency_key":"confirm-1"}'
+  -d '{
+    "session_id":"sess-abc...",
+    "message":"confirm",
+    "edited_fields": {"requested_amount": 1700000},
+    "idempotency_key":"confirm-1"
+  }'
 
 # Başvuruya bak
 curl -H "X-Customer-Id: CUST001" \
   http://localhost:8080/applications/APP-XXXXXXXXXXXX
+
+# Müşteri kullanım izleme (suspicious abuse erken uyarı)
+curl -H "X-Customer-Id: CUST001" \
+  http://localhost:8080/admin/customer-token-usage/CUST001
 ```
 
 ### Diğer endpointler
 
 - `GET /health`
+- `POST /chat/session` — chatbot açıldığında çağrılır, greeting üretir
 - `GET /sessions/{session_id}` — persisted conversation state
 - `POST /rag/ingest` — opsiyonel; FAQ dokümanını yeniden yükler
+- `GET /admin/customer-token-usage/{customer_id}` — customer bazlı LLM token / cost tüketimi (PII-free, abuse pattern erken uyarı)
+- `GET /admin/llm-usage/summary` — model × node bazlı toplam kullanım
 
 ---
 
@@ -221,12 +232,6 @@ Bu üç senaryo `scripts/demo_conversation.py` ile birebir çalıştırılabilir
 ### A) Yeni araç valid başvuru + HGS
 
 ```
-U: merhaba
-B: Taşıt finansmanı ön başvuru sürecinde araç bilgileri ve gerekirse kefil/satıcı
-   TCKN bilgisi gibi kişisel veriler işlenecektir... Onaylıyor musunuz? (Evet/Hayır)
-U: Evet kabul ediyorum
-B: Taşıt finansmanı ön başvurusu için size yardımcı olabilirim. Yeni araç mı yoksa
-   ikinci el araç için mi başvuru yapmak istiyorsunuz?
 U: Yeni araç. Toyota Corolla, fatura 3 milyon, 1 milyon finansman istiyorum.
 B: Taşıt finansmanı ön başvuru bilgilerinizi özetliyorum:
    - Finansman türü: Yeni taşıt
@@ -292,7 +297,6 @@ Bu projedeki en kritik mimari karar: **LLM finansal/regülatif kararları vermez
 | Araç yaşı hesabı | `domain/date_utils.py` | "2021 model = 5 yaş" gibi LLM hatalarını engellemek için tescil tarihinden hesaplanır |
 | Kefil zorunluluğu | `domain/rules.py` | Politika; her test prod'da hukuk onayına tabi olur |
 | Idempotency (duplicate başvuru) | `persistence/repositories.py` + `security/idempotency.py` | Database-level constraint; LLM bilemez |
-| Self-as-guarantor kontrolü | `chatbot/nodes/field_extraction_node.py` | Compliance — müşterinin kendi TCKN'sini kefil yazamaması bankanın iç kuralı |
 
 LLM yalnızca **doğal dil → yapılandırılmış veri** (intent + alan çıkarımı) ve **bağlam → cevap** (FAQ üretimi) için kullanılır. Bu sayede:
 - Bir model değişikliği (Qwen→Llama) iş kurallarını etkilemez
@@ -454,19 +458,16 @@ curl http://localhost:8080/admin/llm-budget/status
 
 Banka chatbot'unda **inference maliyeti = (GPU saat × concurrent kullanıcı) / başarılı başvuru**. Optimizasyon stratejisi:
 
-1. **Her mesajda LLM çağırma.** Affirmation/rejection ("evet", "hayır", "onaylıyorum") `RuleBasedExtractor`'un shortcut'larında yakalanır → LLM çağrısı yok.
-2. **Routing**: 
-   - Intent classifier küçük model (7B/14B) ile,
-   - FAQ üretimi orta model ile (32B),
-   - Yalnızca handoff edge-case'lerde 70B çalıştırılır.
-3. **FAQ cache.** Sık sorulan 30–50 soruyu (embedding, top-3) hash'leyip cevabını cache'le. Sözleşmesel SLA ile zaman bazlı invalidate.
-4. **Embedding offline.** Doküman embedding'i bir kere üretilir; queries hash veya küçük encoder ile yapılır.
-5. **Quantization.** AWQ 4-bit ile 70B → ~42 GB; throughput +%30–50.
-6. **vLLM continuous batching.** Aynı GPU üzerinde 30–60 concurrent stream taşır.
-7. **Short prompts.** System prompt 250 token altında; context yalnızca o turn için gereken alanları içerir.
-8. **Conversation summarization.** Uzun konuşmalarda raw history yerine özet besle (state'in `history` alanını trim'le).
-9. **Deterministic shortcut'lar metrik olarak izlenir** — "LLM bypass rate" Langfuse'de dashboard'da görünür. Hedef: %60+ turn'lerde LLM hiç çağrılmasın.
-10. **Failover ucuza.** vLLM down ise Ollama 14B fallback; her ikisi de down ise `LLM_PROVIDER=mock` rule-based extractor devreye girer (sistem çalışmaya devam eder).
+1. **Routing**: intent + alan çıkarımı + collection prompt + validation yumuşatma → small model (7B/14B); FAQ + uzun cevap → large (70B AWQ); safety check → guard (8B).
+2. **FAQ cache.** Sık sorulan 30–50 soruyu (embedding, top-3) hash'leyip cevabını cache'le. Sözleşmesel SLA ile zaman bazlı invalidate.
+3. **Embedding offline.** Doküman embedding'i bir kere üretilir; queries hash veya küçük encoder ile yapılır.
+4. **Quantization.** AWQ 4-bit ile 70B → ~42 GB; throughput +%30–50.
+5. **vLLM continuous batching.** Aynı GPU üzerinde 30–60 concurrent stream taşır.
+6. **Short prompts.** System prompt'lar 200-300 token; context yalnızca o turn için gereken alanları içerir.
+7. **Conversation summarization.** Uzun konuşmalarda raw history yerine özet besle (state'in `history` alanını trim'le).
+8. **Token budget enforcement.** Her node için `max_input_tokens` / `max_output_tokens` hard cap; aşılırsa pre-call hard stop + safe deterministic reply.
+9. **Customer-bazlı sliding-window kontrolü.** Saatlik + günlük token kotası — masraf güvenliği + chatbot'u kapsam dışı (örn. kod yazdırma) kullanmaya çalışan abuse pattern'ler için ikinci kontrol katmanı.
+10. **Failover.** vLLM down → LiteLLM `fallback_alias` zinciri; her ikisi de down → safe deterministic reply (`response_gen` fallback metni) — kullanıcıya selamsız boş ekran asla.
 
 ---
 
@@ -475,7 +476,7 @@ Banka chatbot'unda **inference maliyeti = (GPU saat × concurrent kullanıcı) /
 | Konu | Karar |
 |------|-------|
 | PII | TCKN/telefon/email loglarda maskelenir (`security/pii.py`). |
-| KVKK | İlk adımda aydınlatma + açık rıza; rıza yoksa başvuru kapatılamaz. |
+| KVKK | Açık rıza login adımında alındığı varsayılır; chatbot kişisel veriyi on-prem inference ile işler, banka dışına çıkarmaz. |
 | TCKN | Checksum doğrulaması (`domain/tckn.py`); geçersizde tekrar sor. |
 | Prompt injection | Pattern tabanlı blok (`security/guardrails.py`); RAG context'i de filtrelenir. |
 | Tool allowlist | LLM yalnızca `ALLOWED_TOOLS` listesindeki işlevleri çağırabilir. |
@@ -516,14 +517,14 @@ Demo script senaryoları:
 
 1. **LLM karar vermez** — limitler, kefil zorunluluğu, idempotency, KVKK gating tamamen kod tarafında.
 2. **LangGraph state machine** — her turn baştan compile edilmiş graph üzerinden tek path; node'lar küçük, test edilebilir.
-3. **Mock-first LLM mimarisi** — `RuleBasedExtractor` + `HashEmbedder` sayesinde testler ve evaller harici servis olmadan koşar; vLLM/Ollama pluggable.
+3. **LLM-first konuşma + deterministic kurallar** — niyet/alan çıkarımı, validation yumuşatma ve FAQ üretimi LLM; greeting customer-master'dan gelen ad+gender ile **template** (LLM çağrısı yok); limit/oran/kefil/idempotency/DB tamamen `rules.py` ve `security/*`'ta deterministic. Test/demo için stub extractor (`dev_extractor.py`) gerçek LLM olmadan akışı tam olarak yürütür.
 4. **Deterministic rule engine** — `domain/rules.py` ile NEW/USED validatorları; eşikler magic-number değil named constant.
 5. **Idempotency garantili DB write** — `(scope, key)` unique constraint; default key `session_id:confirm` + opsiyonel client `idempotency_key`.
-6. **KVKK consent gate** — onay öncesi kefil/satıcı TCKN toplanmaz; ilk mesajdaki başvuru bilgisi consent sonrası replay edilir.
-7. **PII masking ve audit trail** — TCKN/telefon/email loglarda maskelenir; her kritik olay `audit_logs` tablosuna.
-8. **Guardrail iki katmanda** — kullanıcı inputu + RAG context (dokümandan gelen "ignore instructions" satırları temizlenir); tool allowlist enforced.
-9. **Vehicle catalog ayrı servis abstraksiyonu** — binek/ticari kararı LLM'e değil, katalog servisine sorulur; MVP'de mock, prod'da kasko değer servisi.
-10. **Resume + finance-type switch + self-as-guarantor kontrolü** — gerçek bankacılık UX edge-case'leri sade kodla çözüldü; her biri regresyon testiyle korunuyor.
+6. **PII masking ve audit trail** — TCKN/telefon/email loglarda maskelenir; her kritik olay `audit_logs` tablosuna.
+7. **Guardrail iki katmanda** — kullanıcı inputu + RAG context (dokümandan gelen "ignore instructions" satırları temizlenir); tool allowlist enforced.
+8. **Vehicle catalog ayrı servis abstraksiyonu** — binek/ticari kararı LLM'e değil, katalog servisine sorulur; MVP'de mock, prod'da kasko değer servisi.
+9. **LiteLLM gateway** — node bazlı routing, token budget, fallback, virtual-key auth; uygulama kodu model ID bilmez.
+10. **Inline-editable summary + customer token budget** — onay öncesi UI tablo render eder, kullanıcı text-box'tan değer düzeltir; backend `edited_fields`'i merge edip kuralları yeniden koşar. Customer-bazlı sliding-window token kontrolü hem masraf hem abuse pattern erken uyarısı sağlar.
 
 ---
 
@@ -539,4 +540,4 @@ Demo script senaryoları:
 - [ ] Observability: Langfuse veya LangSmith tracing, OpenTelemetry metrics, Prometheus dashboard.
 - [ ] LLM rate-limit, concurrency control ve fallback model zinciri.
 - [ ] Eval suite'i CI'a bağla, eşik altına düşerse deploy'u engelle.
-- [ ] KVKK kapsamında aydınlatma metninin hukuk onaylı versiyonunu bağla; data retention policy uygula.
+- [ ] Data retention politikası (audit_logs, conversation_states) ve PII silme akışı.

@@ -45,10 +45,9 @@ def test_3m_upper_cap():
     assert not res.is_valid
 
 
-def test_seller_tckn_optional_when_skipped():
+def test_seller_tckn_optional_when_blank():
     fields = _base()
     fields.seller_tckn = None
-    fields.seller_tckn_intent_skipped = True
     res = validate_used_vehicle_application(fields)
     assert res.is_valid
 

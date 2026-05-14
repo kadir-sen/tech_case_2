@@ -57,12 +57,13 @@ def test_used_3m_upper_cap():
     assert state.last_validation.max_allowed_amount == 3_000_000.0
 
 
-def test_used_seller_tckn_optional_skip():
-    sid = _sid("used-seller-skip")
+def test_used_seller_tckn_optional_when_blank():
+    sid = _sid("used-seller-blank")
     accept_consent(sid)
     reply, state = send_message(
         sid,
-        "İkinci el araç, kasko 2 milyon, tescil 01.06.2023, 500 bin finansman. Satıcı TCKN sonra verebilirim.",
+        "İkinci el araç, kasko 2 milyon, tescil 01.06.2023, 500 bin finansman istiyorum.",
     )
-    assert state.fields.seller_tckn_intent_skipped is True
+    # Satıcı TCKN paylaşılmadığında akış AWAITING_CONFIRMATION'a ulaşmalı.
+    assert state.fields.seller_tckn is None
     assert state.current_step == ConversationStep.AWAITING_CONFIRMATION

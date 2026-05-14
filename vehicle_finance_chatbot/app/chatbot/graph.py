@@ -12,7 +12,6 @@ from typing import Any
 from langgraph.graph import END, START, StateGraph
 
 from app.chatbot.nodes.collection_node import collection_node
-from app.chatbot.nodes.consent_node import consent_node
 from app.chatbot.nodes.faq_router_node import faq_router_node
 from app.chatbot.nodes.field_extraction_node import field_extraction_node
 from app.chatbot.nodes.handoff_node import handoff_node
@@ -24,7 +23,6 @@ from app.chatbot.nodes.validation_node import validation_node
 from app.chatbot.state import GraphState
 from app.domain.enums import (
     ActionType,
-    ConsentStatus,
     ConversationStep,
     IntentType,
 )
@@ -56,12 +54,6 @@ def n_guardrail(state: dict[str, Any]) -> dict[str, Any]:
         )
         gs.add_reply(res.safe_reply or "Bu talebi karşılayamıyorum.")
         gs.add_action(ChatAction(type=ActionType.SAFE_REPLY))
-    return state
-
-
-def n_consent(state: dict[str, Any]) -> dict[str, Any]:
-    gs: GraphState = state["gs"]
-    consent_node(gs)
     return state
 
 
@@ -121,7 +113,7 @@ def n_hgs_decision(state: dict[str, Any]) -> dict[str, Any]:
 
 def n_cancel(state: dict[str, Any]) -> dict[str, Any]:
     gs: GraphState = state["gs"]
-    gs.state.current_step = ConversationStep.SAFE_EXIT
+    gs.state.current_step = ConversationStep.COMPLETED
     gs.add_reply(
         "Talebiniz üzerine başvuru süreci iptal edildi. İhtiyacınız olursa "
         "yeniden başvuru başlatabilirsiniz."
@@ -142,18 +134,6 @@ def route_after_guardrail(state: dict[str, Any]) -> str:
     if gs.guardrail_blocked:
         return "end"
     return "intent"
-
-
-def route_after_consent(state: dict[str, Any]) -> str:
-    gs: GraphState = state["gs"]
-    # FAQ questions are allowed even without consent (general info only).
-    if gs.extracted is not None and gs.extracted.intent == IntentType.FAQ_QUESTION:
-        return "route_intent"
-    if gs.state.consent_status == ConsentStatus.REJECTED:
-        return "end"
-    if gs.state.current_step == ConversationStep.AWAITING_CONSENT:
-        return "end"
-    return "route_intent"
 
 
 def n_route_intent_passthrough(state: dict[str, Any]) -> dict[str, Any]:
@@ -213,7 +193,6 @@ def _build_graph():
 
     g.add_node("load_session", n_load_session)
     g.add_node("guardrail", n_guardrail)
-    g.add_node("consent", n_consent)
     g.add_node("intent", n_intent)
     g.add_node("faq", n_faq)
     g.add_node("apply_fields", n_apply_fields)
@@ -229,23 +208,15 @@ def _build_graph():
     g.add_edge(START, "load_session")
     g.add_edge("load_session", "guardrail")
 
-    # Intent extraction always happens first so downstream nodes (including
-    # consent) can branch on it.
     g.add_conditional_edges(
         "guardrail",
         route_after_guardrail,
         {"end": END, "intent": "intent"},
     )
 
-    g.add_edge("intent", "consent")
-
-    g.add_conditional_edges(
-        "consent",
-        route_after_consent,
-        {"end": END, "route_intent": "route_intent"},
-    )
-
     g.add_node("route_intent", n_route_intent_passthrough)
+    g.add_edge("intent", "route_intent")
+
     g.add_conditional_edges(
         "route_intent",
         route_after_intent,

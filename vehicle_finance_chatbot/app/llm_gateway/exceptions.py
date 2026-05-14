@@ -22,3 +22,20 @@ class ProviderError(GatewayError):
 
 class CloudFallbackDisabledError(GatewayError):
     """A cloud fallback was attempted while ``ENABLE_CLOUD_FALLBACK=false``."""
+
+
+class CustomerBudgetExceededError(GatewayError):
+    """Customer's sliding-window token quota has been exhausted.
+
+    Bu hatanın amacı sadece masraf koruması değil; kümülatif token tüketimi
+    aniden artan kullanıcılar (chatbot'u sipariş asistanı yerine genel
+    amaç LLM gibi kullanmaya çalışan abuse senaryoları) için **erken uyarı
+    katmanı**dır. Aşıldığında caller kullanıcıya graceful bir mesaj döner
+    ve audit'e yazar.
+    """
+
+    def __init__(self, message: str, *, window: str, used_tokens: int, limit: int) -> None:
+        super().__init__(message)
+        self.window = window
+        self.used_tokens = used_tokens
+        self.limit = limit

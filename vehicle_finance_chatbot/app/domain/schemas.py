@@ -1,14 +1,13 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 from app.domain.enums import (
     ActionType,
     ApplicationStatus,
-    ConsentStatus,
     ConversationStep,
     FinanceType,
     IntentType,
@@ -28,6 +27,10 @@ USED_VEHICLE_MAX_FINANCING_AMOUNT: float = 3_000_000.0
 class CustomerProfile(BaseModel):
     customer_id: str
     full_name: str
+    # Banka customer-master her müşteri kaydında cinsiyet bilgisi tutar.
+    # Greeting'de "Bey / Hanım" hitabı bu alandan üretilir — LLM tahmininin
+    # yanlış gitme riskini ortadan kaldırır.
+    gender: Literal["MALE", "FEMALE"]
     masked_tckn: str
     phone: str
     segment: str = "MASS"
@@ -49,8 +52,6 @@ class ApplicationFields(BaseModel):
     vehicle_age: int | None = None
     model_year: int | None = None
     seller_tckn: str | None = None
-    seller_tckn_intent_skipped: bool = False
-    approximate_age_requires_confirmation: bool = False
 
     # Common
     requested_amount: float | None = None
@@ -79,7 +80,6 @@ class ExtractedFields(BaseModel):
     vehicle_age: int | None = None
     registration_date: date | None = None
     seller_tckn: str | None = None
-    seller_tckn_skip: bool = False
 
     requested_amount: float | None = None
 
@@ -93,13 +93,11 @@ class ConversationStateModel(BaseModel):
     session_id: str
     customer_id: str | None = None
 
-    consent_status: ConsentStatus = ConsentStatus.NOT_ASKED
     current_step: ConversationStep = ConversationStep.START
     fields: ApplicationFields = Field(default_factory=ApplicationFields)
 
     last_validation: ValidationResult | None = None
     pending_question: str | None = None
-    pending_application_message: str | None = None  # First-turn message to replay after consent
     application_id: str | None = None
     hgs_offered: bool = False
     hgs_accepted: bool | None = None
@@ -115,6 +113,10 @@ class ChatRequest(BaseModel):
     session_id: str
     message: str
     idempotency_key: str | None = None
+    # UI'ın inline-editable özet tablosundan döndürdüğü override değerleri.
+    # Backend her zaman ham değerleri Pydantic / rules.py ile yeniden
+    # validate eder; istemci-tarafı manipülasyon güvenli değildir.
+    edited_fields: dict[str, Any] | None = None
 
 
 class ChatAction(BaseModel):
@@ -126,7 +128,6 @@ class ChatAction(BaseModel):
 class ChatStateView(BaseModel):
     current_step: ConversationStep
     finance_type: FinanceType | None = None
-    consent_status: ConsentStatus
     missing_fields: list[str] = Field(default_factory=list)
     validation_errors: list[str] = Field(default_factory=list)
     application_id: str | None = None

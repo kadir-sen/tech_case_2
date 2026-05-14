@@ -27,8 +27,7 @@ from app.llm_gateway.routing_policy import (
     NODE_BUDGETS,
     NODE_FAQ,
     NODE_FIELD,
-    NODE_INTENT,
-    NODE_SAFETY,
+    NODE_RESPONSE,
 )
 from app.llm_gateway.token_counter import count_tokens
 from app.llm_gateway.usage_logger import hash_customer
@@ -140,17 +139,16 @@ def test_fit_to_budget_caps_chunks_at_max_context_chunks():
 
 # --- routing ---
 
-def test_intent_classification_routes_to_small_model():
-    assert NODE_BUDGETS[NODE_INTENT].model_alias.endswith("-small")
+def test_field_extraction_routes_to_small_model():
     assert NODE_BUDGETS[NODE_FIELD].model_alias.endswith("-small")
+
+
+def test_response_generation_routes_to_small_model():
+    assert NODE_BUDGETS[NODE_RESPONSE].model_alias.endswith("-small")
 
 
 def test_faq_routes_to_large_model():
     assert NODE_BUDGETS[NODE_FAQ].model_alias.endswith("-large")
-
-
-def test_safety_routes_to_guard_model():
-    assert NODE_BUDGETS[NODE_SAFETY].model_alias.endswith("-guard")
 
 
 # --- gateway invocation ---
@@ -282,7 +280,7 @@ def test_usage_log_does_not_contain_plain_customer_id(monkeypatch):
     client = LLMGatewayClient(backend=_CapturingBackend(completion="ok"))
     sess = _sid("pii")
     client.invoke(
-        node_purpose=NODE_INTENT,
+        node_purpose=NODE_FIELD,
         system_prompt="extract",
         user_message=f"benim tckn {VALID_TCKN_GUARANTOR} olsun lütfen",
         session_id=sess,
@@ -322,12 +320,11 @@ def test_extraction_chain_uses_gateway_when_enabled(monkeypatch):
 
     from app.chatbot.chains.extraction_chain import LLMExtractor
     from app.domain.schemas import ConversationStateModel
-    from app.domain.enums import ConsentStatus, ConversationStep
+    from app.domain.enums import ConversationStep
 
     state = ConversationStateModel(
         session_id=_sid("extract-gw"),
         customer_id="CUST001",
-        consent_status=ConsentStatus.ACCEPTED,
         current_step=ConversationStep.AWAITING_INTENT,
     )
     ex = LLMExtractor()
@@ -337,14 +334,13 @@ def test_extraction_chain_uses_gateway_when_enabled(monkeypatch):
     assert captured.calls[0]["node"] == NODE_FIELD
 
 
-def test_gateway_disabled_does_not_break_existing_flow():
-    """When disabled (default), the existing RuleBasedExtractor path is
-    used — i.e. the 76 legacy tests are unaffected. We verify by making
-    a couple of representative calls.
+def test_gateway_disabled_keeps_direct_path_alive():
+    """When the gateway is disabled the extractor falls back to a direct
+    ChatOpenAI call. We don't instantiate that path here (no real LLM in
+    CI); we just verify the gateway client can be built with the flag off.
     """
     settings = get_settings()
     assert settings.llm_gateway_enabled is False
-    # Just ensure import + instantiation works with disabled flag.
     client = LLMGatewayClient(backend=_CapturingBackend())
     assert client.enabled is False
 
@@ -353,7 +349,7 @@ def test_admin_summary_returns_aggregated_usage(monkeypatch):
     settings = get_settings()
     monkeypatch.setattr(settings, "llm_gateway_enabled", True)
     client = LLMGatewayClient(backend=_CapturingBackend(completion="ok"))
-    client.invoke(node_purpose=NODE_INTENT, system_prompt="s", user_message="u",
+    client.invoke(node_purpose=NODE_FIELD, system_prompt="s", user_message="u",
                   session_id=_sid("summary"))
     client.invoke(node_purpose=NODE_FAQ, system_prompt="s", user_message="u",
                   session_id=_sid("summary"))

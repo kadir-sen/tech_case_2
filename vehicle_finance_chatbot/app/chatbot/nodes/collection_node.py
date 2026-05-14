@@ -1,28 +1,12 @@
 from __future__ import annotations
 
+from app.chatbot.response_gen import (
+    render_collection_prompt,
+    render_finance_type_prompt,
+)
 from app.chatbot.state import GraphState
 from app.domain.enums import ActionType, ConversationStep, FinanceType
 from app.domain.schemas import ChatAction
-
-
-_FIELD_PROMPTS: dict[str, str] = {
-    "invoice_value": "Aracın proforma fatura değerini paylaşır mısınız? (örn. 4 milyon TL)",
-    "casco_value": "Aracın kasko değerini paylaşır mısınız? (örn. 2,4 milyon TL)",
-    "vehicle_model": "Aracın model adını paylaşır mısınız? (örn. Toyota Corolla)",
-    "vehicle_model_clarification": (
-        "Belirttiğiniz araç modelini katalogumuzda eşleştiremedim. "
-        "Marka ve model adını tam olarak yazar mısınız? (örn. Renault Megane)"
-    ),
-    "requested_amount": "Talep ettiğiniz finansman tutarını paylaşır mısınız? (örn. 2 milyon TL)",
-    "guarantor_tckn": (
-        "Bu başvuru için kefil TCKN bilgisi gerekiyor. Kefilin 11 haneli "
-        "TCKN bilgisini paylaşır mısınız?"
-    ),
-    "registration_date": (
-        "Araç yaşını net hesaplayabilmem için ruhsat/tescil tarihini paylaşır mısınız? "
-        "(örn. 12.05.2021)"
-    ),
-}
 
 
 def collection_node(graph_state: GraphState) -> GraphState:
@@ -32,10 +16,7 @@ def collection_node(graph_state: GraphState) -> GraphState:
     # If finance type not yet known, ask first.
     if fields.finance_type is None:
         state.current_step = ConversationStep.AWAITING_FINANCE_TYPE
-        graph_state.add_reply(
-            "Taşıt finansmanı ön başvurusu için size yardımcı olabilirim. "
-            "Yeni araç mı yoksa ikinci el araç için mi başvuru yapmak istiyorsunuz?"
-        )
+        graph_state.add_reply(render_finance_type_prompt())
         graph_state.add_action(ChatAction(type=ActionType.ASK_FINANCE_TYPE))
         return graph_state
 
@@ -45,14 +26,6 @@ def collection_node(graph_state: GraphState) -> GraphState:
         graph_state.add_reply(
             "Paylaştığınız kefil TCKN bilgisi geçersiz görünüyor. "
             "Lütfen 11 haneli TCKN'yi kontrol edip tekrar yazar mısınız?"
-        )
-        graph_state.add_action(ChatAction(type=ActionType.ASK_FIELD, field="guarantor_tckn"))
-        return graph_state
-
-    if graph_state.metadata.get("self_as_guarantor"):
-        graph_state.add_reply(
-            "Verdiğiniz TCKN sizin kendi TCKN bilginiz görünüyor. "
-            "Kefil olarak farklı bir kişinin TCKN bilgisini paylaşır mısınız?"
         )
         graph_state.add_action(ChatAction(type=ActionType.ASK_FIELD, field="guarantor_tckn"))
         return graph_state
@@ -68,7 +41,17 @@ def collection_node(graph_state: GraphState) -> GraphState:
     missing = graph_state.metadata.get("missing_fields") or []
     if missing:
         first = missing[0]
-        prompt = _FIELD_PROMPTS.get(first, f"Lütfen {first} bilgisini paylaşır mısınız?")
+        requires_guarantor = bool(
+            state.last_validation and state.last_validation.requires_guarantor
+        )
+        prompt = render_collection_prompt(
+            first,
+            fields,
+            requires_guarantor=requires_guarantor,
+            session_id=state.session_id,
+            customer_id=state.customer_id,
+            conversation_step=state.current_step.value,
+        )
         graph_state.add_reply(prompt)
         graph_state.add_action(ChatAction(type=ActionType.ASK_FIELD, field=first))
         return graph_state

@@ -12,7 +12,7 @@ from app.domain.schemas import (
     ValidationResult,
 )
 from app.domain.tckn import is_valid_tckn
-from app.domain.vehicle_catalog import is_commercial_model, is_unknown_model
+from app.domain.vehicle_catalog import is_commercial_model
 
 
 def _fmt(amount: float) -> str:
@@ -42,12 +42,8 @@ def validate_new_vehicle_application(fields: ApplicationFields) -> ValidationRes
             "üzerinde olduğu için yeni taşıt finansmanı başvurusu oluşturulamaz."
         )
 
-    if fields.vehicle_model:
-        if is_commercial_model(fields.vehicle_model):
-            errors.append("Ticari araç modelleri için yeni taşıt finansmanı başvurusu oluşturulamaz.")
-        elif is_unknown_model(fields.vehicle_model):
-            # Not an error per se — flagged through missing for clarification.
-            missing.append("vehicle_model_clarification")
+    if fields.vehicle_model and is_commercial_model(fields.vehicle_model):
+        errors.append("Ticari araç modelleri için yeni taşıt finansmanı başvurusu oluşturulamaz.")
 
     if fields.invoice_value is not None:
         max_allowed = round(invoice_value * NEW_VEHICLE_MAX_FINANCING_RATIO, 2)

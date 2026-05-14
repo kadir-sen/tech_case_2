@@ -29,8 +29,6 @@ def _ensure_handler() -> None:
 
 
 # Critical events emitted across the chat workflow.
-EVENT_CONSENT_ACCEPTED = "consent_accepted"
-EVENT_CONSENT_REJECTED = "consent_rejected"
 EVENT_FIELD_UPDATED = "field_updated"
 EVENT_VALIDATION_PASSED = "validation_passed"
 EVENT_VALIDATION_FAILED = "validation_failed"

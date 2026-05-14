@@ -64,6 +64,31 @@ def llm_usage_summary():
     return _usage_repo.summary()
 
 
+@admin_router.get("/customer-token-usage/{customer_id}")
+def customer_token_usage(customer_id: str, recent_limit: int = 20):
+    """Müşteri bazlı kümülatif token kullanımı + son N çağrı metadata.
+
+    PII içermez — customer_id istek anında hash'lenir; dönen kayıtlarda
+    hash görünür. Şüpheli abuse pattern'lerini (chatbot'u kapsam dışı
+    görevler için kullanma denemeleri) erken yakalamak için kullanılır.
+    """
+    from app.llm_gateway.usage_logger import hash_customer
+
+    summary = _usage_repo.customer_usage_summary(hash_customer(customer_id), recent_limit=recent_limit)
+    settings = get_settings()
+    summary["limits"] = {
+        "hourly": settings.max_tokens_per_customer_hourly,
+        "daily": settings.max_tokens_per_customer_daily,
+    }
+    summary["status"] = {
+        "over_hourly": summary.get("tokens_last_1h", 0) >= settings.max_tokens_per_customer_hourly
+        if settings.max_tokens_per_customer_hourly > 0 else False,
+        "over_daily": summary.get("tokens_last_24h", 0) >= settings.max_tokens_per_customer_daily
+        if settings.max_tokens_per_customer_daily > 0 else False,
+    }
+    return summary
+
+
 @admin_router.get("/llm-budget/status")
 def llm_budget_status():
     settings = get_settings()

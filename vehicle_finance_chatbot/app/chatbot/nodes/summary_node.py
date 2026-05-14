@@ -13,46 +13,111 @@ def _fmt_amount(value: float | None) -> str:
     return f"{value:,.0f}".replace(",", ".") + " TL"
 
 
-def summary_node(graph_state: GraphState) -> GraphState:
+def _build_summary_rows(graph_state: GraphState) -> list[dict]:
+    """Inline-editable summary table — her satır bir başvuru alanı.
+
+    UI bu payload'ı render eder: ``editable=True`` olan alanlar text-box
+    olur; kullanıcı değişiklik yapıp ``edited_fields`` ile gönderir.
+    Sistemce hesaplanmış alanlar (max_allowed_amount) editable=False.
+    """
     state = graph_state.state
     fields = state.fields
-    if fields.finance_type is None:
-        return graph_state
+    rows: list[dict] = []
 
-    lines: list[str] = []
-    lines.append("Taşıt finansmanı ön başvuru bilgilerinizi özetliyorum:")
     if fields.finance_type == FinanceType.NEW:
-        lines.append(f"- Finansman türü: Yeni taşıt")
-        lines.append(f"- Araç modeli: {fields.vehicle_model or '-'}")
-        lines.append(f"- Proforma fatura değeri: {_fmt_amount(fields.invoice_value)}")
-        lines.append(f"- Talep edilen finansman tutarı: {_fmt_amount(fields.requested_amount)}")
+        rows.append(
+            {"key": "finance_type", "label": "Finansman türü", "value": "Yeni taşıt", "editable": False, "type": "text"}
+        )
+        rows.append(
+            {"key": "vehicle_model", "label": "Araç modeli", "value": fields.vehicle_model or "-", "editable": True, "type": "text"}
+        )
+        rows.append(
+            {"key": "invoice_value", "label": "Proforma fatura değeri", "value": fields.invoice_value, "editable": True, "type": "currency", "currency": "TRY"}
+        )
+        rows.append(
+            {"key": "requested_amount", "label": "Talep edilen finansman", "value": fields.requested_amount, "editable": True, "type": "currency", "currency": "TRY"}
+        )
         if fields.guarantor_tckn:
-            lines.append(f"- Kefil TCKN: {mask_tckn(fields.guarantor_tckn)}")
+            rows.append(
+                {"key": "guarantor_tckn", "label": "Kefil TCKN", "value": mask_tckn(fields.guarantor_tckn), "editable": True, "type": "tckn"}
+            )
     else:
-        lines.append(f"- Finansman türü: İkinci el taşıt")
-        lines.append(f"- Araç kasko değeri: {_fmt_amount(fields.casco_value)}")
+        rows.append(
+            {"key": "finance_type", "label": "Finansman türü", "value": "İkinci el taşıt", "editable": False, "type": "text"}
+        )
+        rows.append(
+            {"key": "casco_value", "label": "Araç kasko değeri", "value": fields.casco_value, "editable": True, "type": "currency", "currency": "TRY"}
+        )
         if fields.registration_date:
-            lines.append(f"- Tescil tarihi: {fields.registration_date.isoformat()}")
+            rows.append(
+                {"key": "registration_date", "label": "Tescil tarihi", "value": fields.registration_date.isoformat(), "editable": True, "type": "date"}
+            )
         if fields.vehicle_age is not None:
-            note = " (yaklaşık)" if fields.approximate_age_requires_confirmation else ""
-            lines.append(f"- Araç yaşı: {fields.vehicle_age}{note}")
-        lines.append(f"- Talep edilen finansman tutarı: {_fmt_amount(fields.requested_amount)}")
+            rows.append(
+                {"key": "vehicle_age", "label": "Araç yaşı", "value": fields.vehicle_age, "editable": False, "type": "number"}
+            )
+        rows.append(
+            {"key": "requested_amount", "label": "Talep edilen finansman", "value": fields.requested_amount, "editable": True, "type": "currency", "currency": "TRY"}
+        )
         if fields.seller_tckn:
-            lines.append(f"- Satıcı TCKN: {mask_tckn(fields.seller_tckn)}")
-        elif fields.seller_tckn_intent_skipped:
-            lines.append("- Satıcı TCKN: Daha sonra paylaşılacak")
+            rows.append(
+                {"key": "seller_tckn", "label": "Satıcı TCKN", "value": mask_tckn(fields.seller_tckn), "editable": True, "type": "tckn"}
+            )
         else:
-            lines.append("- Satıcı TCKN: Paylaşılmadı (opsiyonel)")
+            rows.append(
+                {"key": "seller_tckn", "label": "Satıcı TCKN", "value": None, "editable": True, "type": "tckn", "placeholder": "Opsiyonel"}
+            )
 
     if state.last_validation and state.last_validation.max_allowed_amount is not None:
-        lines.append(
-            f"- Maksimum talep edilebilecek tutar: "
-            f"{_fmt_amount(state.last_validation.max_allowed_amount)}"
+        rows.append(
+            {
+                "key": "max_allowed_amount",
+                "label": "Maksimum izinli tutar",
+                "value": state.last_validation.max_allowed_amount,
+                "editable": False,
+                "type": "currency",
+                "currency": "TRY",
+                "hint": "Sistemce hesaplanmıştır",
+            }
         )
 
-    lines.append("\nBu bilgilerle ön başvuru kaydı oluşturulacaktır. Onaylıyor musunuz?")
-    graph_state.add_reply("\n".join(lines))
-    graph_state.add_action(ChatAction(type=ActionType.SHOW_SUMMARY))
+    return rows
+
+
+def _build_summary_text(rows: list[dict]) -> str:
+    """Tablo render edemeyen istemciler için düz metin özet (fallback)."""
+    lines = ["Taşıt finansmanı ön başvuru bilgilerinizi özetliyorum:"]
+    for row in rows:
+        val = row["value"]
+        if val is None:
+            display = "Paylaşılmadı"
+        elif row["type"] == "currency" and isinstance(val, (int, float)):
+            display = _fmt_amount(val)
+        else:
+            display = str(val)
+        lines.append(f"- {row['label']}: {display}")
+    lines.append("\nDeğişiklik yapmak isterseniz tablo üzerinden düzenleyebilirsiniz. Onaylıyor musunuz?")
+    return "\n".join(lines)
+
+
+def summary_node(graph_state: GraphState) -> GraphState:
+    state = graph_state.state
+    if state.fields.finance_type is None:
+        return graph_state
+
+    rows = _build_summary_rows(graph_state)
+    text = _build_summary_text(rows)
+    graph_state.add_reply(text)
+    graph_state.add_action(
+        ChatAction(
+            type=ActionType.SHOW_SUMMARY,
+            payload={
+                "fields": rows,
+                "primary_action": {"label": "Onayla", "intent": "confirm"},
+                "secondary_actions": [{"label": "İptal", "intent": "cancel"}],
+            },
+        )
+    )
     state.current_step = ConversationStep.AWAITING_CONFIRMATION
 
     audit(
@@ -60,8 +125,8 @@ def summary_node(graph_state: GraphState) -> GraphState:
         session_id=state.session_id,
         customer_id=state.customer_id,
         payload={
-            "finance_type": fields.finance_type.value,
-            "requested_amount": fields.requested_amount,
+            "finance_type": state.fields.finance_type.value,
+            "requested_amount": state.fields.requested_amount,
         },
     )
     return graph_state

@@ -58,7 +58,8 @@ def test_guarantor_required_above_5m():
     assert res2.is_valid
 
 
-def test_unknown_model_flags_clarification():
+def test_unknown_model_is_accepted_when_not_commercial():
+    # Case sadece ticari/değil ayrımı ister; kataloğa kayıtlı olmayan binek
+    # modeller geçerli sayılır.
     res = validate_new_vehicle_application(_base(vehicle_model="Lada Niva"))
-    assert not res.is_valid
-    assert "vehicle_model_clarification" in res.missing_fields
+    assert res.is_valid

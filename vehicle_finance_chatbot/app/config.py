@@ -42,6 +42,12 @@ class Settings(BaseSettings):
     pii_log_masking: bool = True
     audit_log_path: str = "./audit.log"
 
+    # Per-customer token quotas (sliding window). 0 disables enforcement.
+    # Aşıldığında ``CustomerBudgetExceededError`` fırlatılır; chat path
+    # graceful bir mesajla cevaplar ve audit kaydı atılır.
+    max_tokens_per_customer_hourly: int = 30_000
+    max_tokens_per_customer_daily: int = 200_000
+
     # Server
     app_host: str = "0.0.0.0"
     app_port: int = 8080

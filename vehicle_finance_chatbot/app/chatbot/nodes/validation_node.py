@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.chatbot.response_gen import render_validation_response
 from app.chatbot.state import GraphState
 from app.domain.enums import ActionType, ConversationStep, FinanceType
 from app.domain.rules import validate_new_vehicle_application, validate_used_vehicle_application
@@ -47,11 +48,14 @@ def validation_node(graph_state: GraphState) -> GraphState:
             },
         )
         state.current_step = ConversationStep.AWAITING_FIELD_FIX
-        for err in result.errors:
-            graph_state.add_reply(err)
-        graph_state.add_reply(
-            "Bilgileri güncellemek ister misiniz? Hangi alanı değiştireceğinizi yazabilirsiniz."
+        reply = render_validation_response(
+            result,
+            fields,
+            session_id=state.session_id,
+            customer_id=state.customer_id,
+            conversation_step=state.current_step.value,
         )
+        graph_state.add_reply(reply)
         graph_state.add_action(ChatAction(type=ActionType.FIX_FIELD))
         return graph_state
 

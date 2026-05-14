@@ -12,7 +12,7 @@
 | Yetkilendirme bypass | `require_customer` zorunlu; session-customer eşleşmesi her turn'de doğrulanır |
 | Duplicate başvuru | `IdempotencyRecord` unique constraint + scope/key |
 | Veri at-rest | TCKN'ler stored masked; `SecretStore` interface prod'da KMS/HSM |
-| KVKK | İlk turn aydınlatma + açık rıza; rıza alınmadan PII yazımı yok |
+| KVKK | Açık rıza mobil bankacılık login adımında sözleşmesel olarak alındığı varsayılır — chatbot kişisel veriyi yalnızca on-prem inference ile işler, banka dışına çıkarmaz |
 
 ## Layer Detayları
 
@@ -51,7 +51,6 @@ shell veya arbitrary read API'ye doğrudan erişim yoktur.
 ### Audit
 
 `security/audit.py` aşağıdaki kritik olayları yazar:
-- `consent_accepted` / `consent_rejected`
 - `field_updated`
 - `validation_passed` / `validation_failed`
 - `summary_shown`

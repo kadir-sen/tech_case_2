@@ -36,6 +36,11 @@ def send_message(
 
 
 def accept_consent(session_id: str) -> ConversationStateModel:
-    send_message(session_id, "merhaba")
-    _, state = send_message(session_id, "Evet, kabul ediyorum")
+    """No-op kept for backwards compatibility. Consent is granted at
+    mobile-banking login; the chatbot does not gate on it. Returns a fresh
+    state if the session is new, mirroring the previous helper signature."""
+    state = _repo.load(session_id)
+    if state is None:
+        state = ConversationStateModel(session_id=session_id, customer_id="CUST001")
+        _repo.save(state)
     return state

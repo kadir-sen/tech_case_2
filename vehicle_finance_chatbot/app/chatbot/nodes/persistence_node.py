@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from app.chatbot.state import GraphState
-from app.domain.enums import ActionType, ConsentStatus, ConversationStep, FinanceType
+from app.domain.enums import ActionType, ConversationStep, FinanceType
 from app.domain.schemas import ChatAction
 from app.persistence.repositories import ApplicationRepository
 from app.security.audit import EVENT_APPLICATION_PERSISTED, audit
@@ -15,12 +15,6 @@ def persistence_node(graph_state: GraphState) -> GraphState:
     state = graph_state.state
     fields = state.fields
     customer = graph_state.customer
-
-    if state.consent_status != ConsentStatus.ACCEPTED:
-        graph_state.add_reply(
-            "Onayınız olmadan ön başvuru oluşturulamaz."
-        )
-        return graph_state
 
     if customer is None or state.customer_id is None:
         graph_state.add_reply(

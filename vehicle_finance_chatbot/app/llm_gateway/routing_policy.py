@@ -2,6 +2,11 @@
 
 The aliases here MUST exist in ``infra/litellm/config.yaml`` as
 ``model_name`` entries. The gateway never references concrete model IDs.
+
+Yalnızca production tarafından çağrılan node purpose'lar burada tanımlıdır:
+``field_extraction`` (LLM-1 · intent + alan çıkarımı),
+``response_generation`` (LLM-2/3 · validation + collection yumuşatma),
+``faq_answer`` (LLM-4 · RAG-grounded cevap).
 """
 from __future__ import annotations
 
@@ -10,23 +15,12 @@ from app.llm_gateway.schemas import NodePolicy
 
 # Node purposes used by the LangGraph nodes. Keep these stable — admin
 # dashboards and budget alarms key off these strings.
-NODE_INTENT = "intent_classification"
 NODE_FIELD = "field_extraction"
 NODE_FAQ = "faq_answer"
-NODE_SUMMARY = "final_summary"
-NODE_SAFETY = "safety_check"
 NODE_RESPONSE = "response_generation"
 
 
 NODE_BUDGETS: dict[str, NodePolicy] = {
-    NODE_INTENT: NodePolicy(
-        name=NODE_INTENT,
-        model_alias="vehicle-finance-small",
-        max_input_tokens=800,
-        max_output_tokens=120,
-        temperature=0.0,
-        fallback_alias="vehicle-finance-large",
-    ),
     NODE_FIELD: NodePolicy(
         name=NODE_FIELD,
         model_alias="vehicle-finance-small",
@@ -42,21 +36,6 @@ NODE_BUDGETS: dict[str, NodePolicy] = {
         max_output_tokens=700,
         max_context_chunks=4,
         temperature=0.1,
-    ),
-    NODE_SUMMARY: NodePolicy(
-        name=NODE_SUMMARY,
-        model_alias="vehicle-finance-small",
-        max_input_tokens=1200,
-        max_output_tokens=350,
-        temperature=0.1,
-        fallback_alias="vehicle-finance-large",
-    ),
-    NODE_SAFETY: NodePolicy(
-        name=NODE_SAFETY,
-        model_alias="vehicle-finance-guard",
-        max_input_tokens=1000,
-        max_output_tokens=100,
-        temperature=0.0,
     ),
     NODE_RESPONSE: NodePolicy(
         name=NODE_RESPONSE,

@@ -1,10 +1,6 @@
 import uuid
 
-from app.domain.enums import (
-    ConsentStatus,
-    ConversationStep,
-    FinanceType,
-)
+from app.domain.enums import ConversationStep, FinanceType
 from tests._helpers import accept_consent, send_message
 from tests.conftest import VALID_TCKN_GUARANTOR
 
@@ -86,9 +82,3 @@ def test_new_vehicle_60_percent_limit_then_fix():
     assert state2.current_step == ConversationStep.AWAITING_CONFIRMATION
 
 
-def test_consent_rejection_blocks_application():
-    sid = _sid("consent-rej")
-    send_message(sid, "merhaba")
-    reply, state = send_message(sid, "Hayır, reddediyorum")
-    assert state.consent_status == ConsentStatus.REJECTED
-    assert state.current_step == ConversationStep.SAFE_EXIT
